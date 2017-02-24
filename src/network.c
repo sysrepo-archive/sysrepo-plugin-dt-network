@@ -14,6 +14,8 @@
 #define XPATH_MAX_LEN 100
 #define BUFSIZE 256
 
+char *interface_name = "eth0";
+
 static int
 module_change_cb(sr_session_ctx_t *session, const char *module_name,
                  sr_notif_event_t event, void *private_ctx)
@@ -23,13 +25,17 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name,
 
 
 static int
-str_from_cmd(const char *cmd, const char *fmt, char *ptr)
+str_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, char *ptr)
 {
     int rc = 0;
     FILE *fp;
     char buf[BUFSIZE];
+    char cmd_buf[BUFSIZE];
+    char *cmd_fmt = "%s %s";
 
-    if ((fp = popen(cmd, "r")) == NULL) {
+    sprintf(cmd_buf, cmd_fmt, cmd, cmd_arg);
+
+    if ((fp = popen(cmd_buf, "r")) == NULL) {
         fprintf(stderr, "Error opening pipe!\n");
         return -1;
     }
@@ -46,11 +52,16 @@ str_from_cmd(const char *cmd, const char *fmt, char *ptr)
 }
 
 static int
-int_from_cmd(const char *cmd, const char *fmt, void *ptr)
+int_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, void *ptr)
 {
     int rc = 0;
     FILE *fp;
     char buf[BUFSIZE];
+
+    char cmd_buf[BUFSIZE];
+    char *cmd_fmt = "%s %s";
+
+    sprintf(cmd_buf, cmd_fmt, cmd, cmd_arg);
 
     if ((fp = popen(cmd, "r")) == NULL) {
         fprintf(stderr, "Error opening pipe!\n");
@@ -93,6 +104,7 @@ test()
     value.type = SR_IDENTITYREF_T;
     value.data.identityref_val = "ethernetCsmacd";
     rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type", &value, SR_EDIT_DEFAULT);
+    printf("Setting %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type");
     if (SR_ERR_OK != rc) {
         fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
         goto cleanup;
@@ -211,12 +223,12 @@ init_config(struct ip_v4 *ipv4)
 
     pclose(fp);
 
-    int_from_cmd(cmd_mtu, "%hu", &ipv4->mtu);
+    int_from_cmd(cmd_mtu, interface_name, "%hu", &ipv4->mtu);
     ipv4->mtu = (unsigned int)ipv4->mtu;
-    str_from_cmd(cmd_enabled, "%s", buf);
+    str_from_cmd(cmd_enabled, interface_name, "%s", buf);
     ipv4->enabled = !strcmp(buf, "UP") ? true : false ;
-    int_from_cmd(cmd_forwarding, "%d", &ipv4->forwarding);
-    str_from_cmd(cmd_origin, "%s", buf);
+    int_from_cmd(cmd_forwarding, interface_name, "%d", &ipv4->forwarding);
+    str_from_cmd(cmd_origin, interface_name, "%s", buf);
     ipv4->origin = string_to_origin(buf);
 
     return 0;
@@ -250,7 +262,7 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         printf("i_v %d\n", i_v);
         /* oper-status */
         char buf[BUFSIZE] = { 0 };
-        str_from_cmd(cmd_enabled, "%s", buf);
+        str_from_cmd(cmd_enabled, interface_name, "%s", buf);
         printf("buf %s\n", buf);
 
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/oper-status");
@@ -261,7 +273,7 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         /* last change */
 
         /* phys address */
-        str_from_cmd(cmd_mac, "%s", buf);
+        str_from_cmd(cmd_mac, interface_name, "%s", buf);
         printf("mac %s\n", buf);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/phys-address");
         sr_val_set_str_data(&v[i_v], SR_STRING_T, buf);
@@ -270,7 +282,7 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         printf("i_v %d\n", i_v);
         /* speed */
         uint64_t speed = 0;
-        int_from_cmd(cmd_speed, "%lu", &speed);
+        int_from_cmd(cmd_speed, interface_name, "%lu", &speed);
         printf("speed %lu\n", speed);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/speed");
         v[i_v].type = SR_UINT64_T;
@@ -291,28 +303,28 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         }
 
         uint64_t tx = 0;
-        int_from_cmd(cmd_tx, "%lu", &tx);
+        int_from_cmd(cmd_tx, interface_name, "%lu", &tx);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/out-octets");
         v[i_v].type = SR_UINT64_T;
         v[i_v].data.uint64_val = tx;
         i_v++;
 
         uint32_t tx_err = 0;
-        int_from_cmd(cmd_tx_err, "%lu", &tx_err);
+        int_from_cmd(cmd_tx_err, interface_name, "%lu", &tx_err);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/out-errors");
         v[i_v].type = SR_UINT32_T;
         v[i_v].data.uint32_val = tx_err;
         i_v++;
 
         uint64_t rx = 0;
-        int_from_cmd(cmd_rx, "%lu", &rx);
+        int_from_cmd(cmd_rx, interface_name, "%lu", &rx);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/in-octets");
         v[i_v].type = SR_UINT64_T;
         v[i_v].data.uint64_val = rx;
         i_v++;
 
         uint32_t rx_err = 0;
-        int_from_cmd(cmd_rx_err, "%lu", &rx_err);
+        int_from_cmd(cmd_rx_err, interface_name, "%lu", &rx_err);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/in-errors");
         v[i_v].type = SR_UINT32_T;
         v[i_v].data.uint32_val = rx_err;
@@ -330,7 +342,7 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         }
 
         uint16_t mtu = 0;
-        int_from_cmd(cmd_mtu, "%lu", &mtu);
+        int_from_cmd(cmd_mtu, interface_name, "%lu", &mtu);
         mtu = (uint16_t) mtu;
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/ipv4/mtu");
         v[i_v].type = SR_UINT16_T;
@@ -367,8 +379,8 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     struct if_interface *eth0 = calloc(1, sizeof(*eth0));
     eth0->ipv4 = calloc(1, sizeof(struct ip_v4));
-    init_config(eth0->ipv4);
-    sysrepo_commit_network(session, eth0);
+    /* init_config(eth0->ipv4); */
+    /* sysrepo_commit_network(session, eth0); */
     test();
 
     SRP_LOG_DBG_MSG("Plugin initialized successfully");

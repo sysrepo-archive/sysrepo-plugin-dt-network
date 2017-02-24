@@ -1,1 +1,1 @@
-cut -f1  /sys/class/net/eth0/speed
+cut -f1  /sys/class/net/${1}/speed
