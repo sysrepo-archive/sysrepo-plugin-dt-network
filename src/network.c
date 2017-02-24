@@ -104,9 +104,8 @@ test()
     value.type = SR_IDENTITYREF_T;
     value.data.identityref_val = "ethernetCsmacd";
     rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type", &value, SR_EDIT_DEFAULT);
-    printf("Setting %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type");
     if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
+      fprintf(stderr, "Error by sr_set_item (%s): %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type", sr_strerror(rc));
         goto cleanup;
     }
 
@@ -117,7 +116,7 @@ test()
     rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='gigaeth0']/ietf-ip:ipv6/address[ip='fe80::ab8']/prefix-length",
                      &value, SR_EDIT_DEFAULT);
     if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
+      fprintf(stderr, "Error by sr_set_item (%s): %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/ietf-ip:ipv6/address[ip='fe80::ab8']/prefix-length", sr_strerror(rc));
         goto cleanup;
     }
 
@@ -379,8 +378,8 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     struct if_interface *eth0 = calloc(1, sizeof(*eth0));
     eth0->ipv4 = calloc(1, sizeof(struct ip_v4));
-    /* init_config(eth0->ipv4); */
-    /* sysrepo_commit_network(session, eth0); */
+    init_config(eth0->ipv4);
+    sysrepo_commit_network(session, eth0);
     test();
 
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
