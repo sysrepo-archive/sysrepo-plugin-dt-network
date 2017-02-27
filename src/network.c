@@ -2,10 +2,8 @@
 
 #include <stdio.h>
 #include <syslog.h>
-#include "sysrepo.h"
-#include "sysrepo/values.h"
-#include "sysrepo/xpath.h"
-#include "sysrepo/plugins.h"
+#include <libnl3/netlink/netlink.h>
+#include <libnl3/netlink/genl/genl.h>
 
 #include "network.h"
 #include "scripts.h"
@@ -13,8 +11,51 @@
 #define MODULE "/ietf-ip"
 #define XPATH_MAX_LEN 100
 #define BUFSIZE 256
+#define MAX_INTERFACES 10
 
-char *interface_name = "eth0";
+static int
+callback(struct nl_msg *msg, void *arg) {
+    char **iffs = (char **) arg;
+    struct nlmsghdr *nlh = nlmsg_hdr(msg);
+    struct ifinfomsg *iface = NLMSG_DATA(nlh);
+    struct rtattr *hdr = IFLA_RTA(iface);
+    int remaining = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
+
+    int i = 0;
+    while (RTA_OK(hdr, remaining)) {
+
+        if (hdr->rta_type == IFLA_IFNAME) {
+            printf("Found network interface %d: %s\n", iface->ifi_index, (char *) RTA_DATA(hdr));
+            iffs[i++] = (char *) RTA_DATA(hdr);
+        }
+
+        hdr = RTA_NEXT(hdr, remaining);
+    }
+
+    return NL_OK;
+}
+
+int
+ls_interfaces() {
+    // Open socket to kernel.
+    struct nl_sock *socket = nl_socket_alloc();  // Allocate new netlink socket in memory.
+    nl_connect(socket, NETLINK_ROUTE);  // Create file descriptor and bind socket.
+
+    // Send request for all network interfaces.
+    struct rtgenmsg rt_hdr = { .rtgen_family = AF_PACKET, };
+    int ret = nl_send_simple(socket, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, &rt_hdr, sizeof(rt_hdr));
+    printf("nl_send_simple returned %d\n", ret);
+
+    // Retrieve the kernel's answer.
+    char iffs[4][20];
+    nl_socket_modify_cb(socket, NL_CB_VALID, NL_CB_CUSTOM, callback, iffs);
+    nl_recvmsgs_default(socket);
+
+    printf("IFFS: %s\n", iffs[0]);
+
+    return 0;
+}
+
 
 static int
 module_change_cb(sr_session_ctx_t *session, const char *module_name,
@@ -79,64 +120,6 @@ int_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, void *ptr)
     return rc;
 }
 
-int
-test()
-{
-    sr_conn_ctx_t *conn = NULL;
-    sr_session_ctx_t *sess = NULL;
-    sr_val_t value = { 0 };
-    int rc = SR_ERR_OK;
-    sr_log_stderr(SR_LL_DBG);
-
-    /* connect to sysrepo */
-    rc = sr_connect("app3", SR_CONN_DEFAULT, &conn);
-    if (SR_ERR_OK != rc) {
-        goto cleanup;
-    }
-
-    /* start session */
-    rc = sr_session_start(conn, SR_DS_STARTUP, SR_SESS_DEFAULT, &sess);
-    if (SR_ERR_OK != rc) {
-        goto cleanup;
-    }
-
-    /* create new interface named 'gigaeth0' of type 'ethernetCsmacd' */
-    value.type = SR_IDENTITYREF_T;
-    value.data.identityref_val = "ethernetCsmacd";
-    rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type", &value, SR_EDIT_DEFAULT);
-    if (SR_ERR_OK != rc) {
-      fprintf(stderr, "Error by sr_set_item (%s): %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/type", sr_strerror(rc));
-        goto cleanup;
-    }
-
-    /* set 'prefix-length' leaf inside of the 'address' list entry with key 'fe80::ab8'
-       (list entry will be automatically created if it does not exist) */
-    value.type = SR_UINT8_T;
-    value.data.uint8_val = 64;
-    rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='gigaeth0']/ietf-ip:ipv6/address[ip='fe80::ab8']/prefix-length",
-                     &value, SR_EDIT_DEFAULT);
-    if (SR_ERR_OK != rc) {
-      fprintf(stderr, "Error by sr_set_item (%s): %s\n", "/ietf-interfaces:interfaces/interface[name='gigaeth0']/ietf-ip:ipv6/address[ip='fe80::ab8']/prefix-length", sr_strerror(rc));
-        goto cleanup;
-    }
-
-    /* commit the changes */
-    rc = sr_commit(sess);
-    if (SR_ERR_OK != rc) {
-        printf("Error by sr_commit: %s\n", sr_strerror(rc));
-        goto cleanup;
-    }
-
-  cleanup:
-    if (NULL != sess) {
-        sr_session_stop(sess);
-    }
-    if (NULL != conn) {
-        sr_disconnect(conn);
-    }
-    return rc;
-}
-
 static int
 sysrepo_commit_network(sr_session_ctx_t *sess, struct if_interface *iface)
 {
@@ -196,6 +179,7 @@ init_config(struct ip_v4 *ipv4)
 {
     FILE *fp;
     char buf[BUFSIZE];
+    char *interface_name = ipv4->address.ip;
 
     if ((fp = popen(cmd_ip, "r")) == NULL) {
         fprintf(stderr, "Error opening pipe\n");
@@ -244,6 +228,9 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
 
     printf("Data for '%s' requested.\n", xpath);
 
+    struct plugin_ctx *ctx = (struct plugin_ctx *) private_ctx;
+    char *interface_name = ctx->key; /* PLACEHOLDER */
+
     if (sr_xpath_node_name_eq(xpath, "interface")) {
 
         *values_cnt = 4;
@@ -282,7 +269,7 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
         /* speed */
         uint64_t speed = 0;
         int_from_cmd(cmd_speed, interface_name, "%lu", &speed);
-        printf("speed %lu\n", speed);
+        printf("speed %llu\n", speed);
         sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/speed");
         v[i_v].type = SR_UINT64_T;
         v[i_v].data.uint64_val = speed;
@@ -370,43 +357,52 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     printf("sr_plugin_init_cb\n");
 
-    rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
-                                    0, SR_SUBSCR_DEFAULT, &subscription);
-    if (SR_ERR_OK != rc) {
-        goto error;
+    /* rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL, */
+    /*                                 0, SR_SUBSCR_DEFAULT, &subscription); */
+    /* if (SR_ERR_OK != rc) { */
+    /*     goto error; */
+    /* } */
+
+    struct plugin_ctx *ctx = calloc(1, sizeof(*ctx));
+    struct list_head interfaces = LIST_HEAD_INIT(interfaces);
+    struct if_interface *interface = calloc(1, sizeof(*interface));
+    interface->ipv4 = calloc(1, sizeof(struct ip_v4));
+    list_add(&interface->head, &interfaces);
+    struct if_interface *iface;
+    list_for_each_entry(iface, &interfaces, head) {
+
     }
+    /* sysrepo_commit_network(session, interface); */
 
-    struct if_interface *eth0 = calloc(1, sizeof(*eth0));
-    eth0->ipv4 = calloc(1, sizeof(struct ip_v4));
-    init_config(eth0->ipv4);
-    sysrepo_commit_network(session, eth0);
-    test();
-
+    ls_interfaces();
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
 
-    rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
-                                   SR_SUBSCR_DEFAULT, &subscription);
-    if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc));
-        goto error;
-    }
 
-    /* free(eth0); */
+  /*   rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL, */
+  /*                                  SR_SUBSCR_DEFAULT, &subscription); */
+  /*   if (SR_ERR_OK != rc) { */
+  /*       fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc)); */
+  /*       goto error; */
+  /*   } */
 
-    /* set subscription as our private context */
-    *private_ctx = subscription;
+  /*   /\* set subscription as our private context *\/ */
+  /*   *private_ctx = subscription; */
 
-    return SR_ERR_OK;
+  /*   return SR_ERR_OK; */
 
   error:
-    SRP_LOG_ERR("Plugin initialization failed: %s", sr_strerror(rc));
-    sr_unsubscribe(session, subscription);
+  /*   SRP_LOG_ERR("Plugin initialization failed: %s", sr_strerror(rc)); */
+  /*   sr_unsubscribe(session, subscription); */
     return rc;
 }
 
 void
 sr_plugin_cleanup_cb(sr_session_ctx_t *session, void *private_ctx)
 {
+    struct plugin_ctx *ctx = private_ctx;
+    if (ctx->subscription) free(ctx->subscription);
+    free(ctx->key);
+    free(ctx);
     sr_unsubscribe(session, private_ctx);
 }
 

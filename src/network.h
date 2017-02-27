@@ -2,6 +2,10 @@
 
 #include <stdbool.h>
 #include <libubox/list.h>
+#include "sysrepo.h"
+#include "sysrepo/values.h"
+#include "sysrepo/xpath.h"
+#include "sysrepo/plugins.h"
 
 #define IP_SIZE 15
 
@@ -92,6 +96,7 @@ struct ip_v6
 
 struct if_interface
 {
+    struct list_head head;
 
     struct ip_v4 *ipv4;
 
@@ -136,4 +141,10 @@ struct if_interface
             PROBE,
         } state;
     } iface_ipv6;
+};
+
+struct plugin_ctx {
+    struct list_head *interfaces;
+    char *key;                  /* interface name */
+    sr_subscription_ctx_t *subscription;
 };
