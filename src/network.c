@@ -12,21 +12,45 @@
 #define XPATH_MAX_LEN 100
 #define BUFSIZE 256
 #define MAX_INTERFACES 10
+#define MAX_INTERFACE_NAME 10
+
+
+static struct if_interface *
+make_interface_ipv4(char *name)
+{
+    struct if_interface *interface;
+    interface = calloc(1, sizeof(*interface));
+    interface->name = calloc(1, MAX_INTERFACE_NAME);
+    if (!(strcpy(interface->name, name))) {
+        fprintf(stderr, "make_interface_ipv4\n");
+        goto error;
+    }
+
+    interface->proto.ipv4 = calloc(1, sizeof(struct ip_v4));
+
+    return interface;
+
+  error:
+    free(interface);
+    return NULL;
+}
 
 static int
-callback(struct nl_msg *msg, void *arg) {
-    char **iffs = (char **) arg;
+ls_interfaces_cb(struct nl_msg *msg, void *arg)
+{
+    struct list_head *interfaces = (struct list_head *) arg;
+    struct if_interface *iff;
     struct nlmsghdr *nlh = nlmsg_hdr(msg);
     struct ifinfomsg *iface = NLMSG_DATA(nlh);
     struct rtattr *hdr = IFLA_RTA(iface);
     int remaining = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
 
-    int i = 0;
     while (RTA_OK(hdr, remaining)) {
 
         if (hdr->rta_type == IFLA_IFNAME) {
-            printf("Found network interface %d: %s\n", iface->ifi_index, (char *) RTA_DATA(hdr));
-            iffs[i++] = (char *) RTA_DATA(hdr);
+            iff = make_interface_ipv4((char *) RTA_DATA(hdr));
+            list_add(&iff->head, interfaces);
+            /* printf("Found network interface %d: %s\n", iface->ifi_index, iff->name); */
         }
 
         hdr = RTA_NEXT(hdr, remaining);
@@ -35,25 +59,20 @@ callback(struct nl_msg *msg, void *arg) {
     return NL_OK;
 }
 
-int
-ls_interfaces() {
-    // Open socket to kernel.
+/* Initialize list of interfaces for given context (with ipv4 kind of interfaces). */
+static void
+ls_interfaces(struct plugin_ctx *ctx)
+{
     struct nl_sock *socket = nl_socket_alloc();  // Allocate new netlink socket in memory.
     nl_connect(socket, NETLINK_ROUTE);  // Create file descriptor and bind socket.
 
-    // Send request for all network interfaces.
+    /* Send request for all network interfaces. */
     struct rtgenmsg rt_hdr = { .rtgen_family = AF_PACKET, };
-    int ret = nl_send_simple(socket, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, &rt_hdr, sizeof(rt_hdr));
-    printf("nl_send_simple returned %d\n", ret);
+    nl_send_simple(socket, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, &rt_hdr, sizeof(rt_hdr));
 
-    // Retrieve the kernel's answer.
-    char iffs[4][20];
-    nl_socket_modify_cb(socket, NL_CB_VALID, NL_CB_CUSTOM, callback, iffs);
+    /* Retrieve the kernel's answer. */
+    nl_socket_modify_cb(socket, NL_CB_VALID, NL_CB_CUSTOM, ls_interfaces_cb, ctx->interfaces);
     nl_recvmsgs_default(socket);
-
-    printf("IFFS: %s\n", iffs[0]);
-
-    return 0;
 }
 
 
@@ -121,18 +140,23 @@ int_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, void *ptr)
 }
 
 static int
-sysrepo_commit_network(sr_session_ctx_t *sess, struct if_interface *iface)
+sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 {
-    int rc = SR_ERR_OK;
     char xpath[XPATH_MAX_LEN];
+    const char *xpath_fmt = "/ietf-interfaces:interfaces/interface[name='%s']/%s";
+    const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
+    int rc = SR_ERR_OK;
     sr_val_t val = { 0 };
     sr_val_t *v = NULL;
 
-    if (iface) {
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+
         /* Set forwarding. */
         val.type = SR_BOOL_T;
         val.data.bool_val = true;
-        rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='eth0']/ietf-ip:ipv4/forwarding",
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "forwarding");
+        rc = sr_set_item(sess, xpath,
                          &val, SR_EDIT_DEFAULT);
         if (SR_ERR_OK != rc) {
             fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
@@ -140,11 +164,12 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct if_interface *iface)
         }
 
         rc = sr_new_values(1, &v);
-        sr_val_set_xpath(&v[0], "/ietf-interfaces:interfaces/interface[name='eth0']/type");
+        sprintf(xpath, xpath_fmt, iface->name, "type");
+        sr_val_set_xpath(&v[0], xpath);
         sr_val_set_str_data(&v[0], SR_IDENTITYREF_T, "ethernetCsmacd");
         v[0].type = SR_IDENTITYREF_T;
         /* val.data.identityref_val = "ethernetCsmacd"; */
-        rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='eth0']/type",
+        rc = sr_set_item(sess, xpath,
                          &v[0], SR_EDIT_DEFAULT);
         if (SR_ERR_OK != rc) {
             fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
@@ -153,19 +178,20 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct if_interface *iface)
 
         /* set MTU. */
         val.type = SR_UINT16_T;
-        val.data.uint16_val = iface->ipv4->mtu;
-        rc = sr_set_item(sess, "/ietf-interfaces:interfaces/interface[name='eth0']/ietf-ip:ipv4/mtu", &val, SR_EDIT_DEFAULT);
+        val.data.uint16_val = iface->proto.ipv4->mtu;
+        printf(xpath, xpath_fmt_ipv4, iface->name, "mtu");
+        rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
         if (SR_ERR_OK != rc) {
             fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
             goto cleanup;
         }
-    }
 
-    /* Commit values set. */
-    rc = sr_commit(sess);
-    if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_commit: %s\n", sr_strerror(rc));
-        goto cleanup;
+        /* Commit values set. */
+        rc = sr_commit(sess);
+        if (SR_ERR_OK != rc) {
+            fprintf(stderr, "Error by sr_commit: %s\n", sr_strerror(rc));
+            goto cleanup;
+        }
     }
 
     return SR_ERR_OK;
@@ -174,8 +200,10 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct if_interface *iface)
     return rc;
 }
 
+
+
 static int
-init_config(struct ip_v4 *ipv4)
+init_config_ipv4(struct ip_v4 *ipv4)
 {
     FILE *fp;
     char buf[BUFSIZE];
@@ -217,10 +245,23 @@ init_config(struct ip_v4 *ipv4)
     return 0;
 }
 
+static int
+init_config(struct plugin_ctx *ctx)
+{
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+        if (iface->proto.ipv4) init_config_ipv4(iface->proto.ipv4);
+    }
+
+    return 0;
+}
+
 /* Handle operational data. */
 static int
-data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void *private_ctx)
+data_provider_cb(const char *cb_xpath, sr_val_t **values, size_t *values_cnt, void *private_ctx)
 {
+    char xpath[XPATH_MAX_LEN];
+    const char *xpath_fmt = "/ietf-interfaces:interfaces-state/interface[name='%s']/%s";
     sr_val_t *v = NULL;
     sr_xpath_ctx_t xp_ctx = {0};
     int i_v = 0;
@@ -231,119 +272,133 @@ data_provider_cb(const char *xpath, sr_val_t **values, size_t *values_cnt, void 
     struct plugin_ctx *ctx = (struct plugin_ctx *) private_ctx;
     char *interface_name = ctx->key; /* PLACEHOLDER */
 
-    if (sr_xpath_node_name_eq(xpath, "interface")) {
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+        const char *if_name = iface->name;
 
-        *values_cnt = 4;
+        if (sr_xpath_node_name_eq(xpath, "interface")) {
 
-        /* allocate space for data to return */
-        rc = sr_new_values(*values_cnt, &v);
-        if (SR_ERR_OK != rc) {
-            return rc;
+            *values_cnt = 4;
+
+            /* allocate space for data to return */
+            rc = sr_new_values(*values_cnt, &v);
+            if (SR_ERR_OK != rc) {
+                return rc;
+            }
+
+            sprintf(xpath, xpath_fmt, if_name, "type");
+            sr_val_set_xpath(&v[i_v], xpath);
+            sr_val_set_str_data(&v[i_v], SR_IDENTITYREF_T, "ethernetCsmacd");
+            i_v++;
+
+            printf("i_v %d\n", i_v);
+            /* oper-status */
+            char buf[BUFSIZE] = { 0 };
+            str_from_cmd(cmd_enabled, interface_name, "%s", buf);
+            printf("buf %s\n", buf);
+
+            sprintf(xpath, xpath_fmt, if_name, "oper-status");
+            sr_val_set_xpath(&v[i_v], xpath);
+            sr_val_set_str_data(&v[i_v], SR_ENUM_T, buf);
+            i_v++;
+
+            printf("i_v %d\n", i_v);
+
+            /* phys address */
+            str_from_cmd(cmd_mac, interface_name, "%s", buf);
+            printf("mac %s\n", buf);
+
+            sprintf(xpath, xpath_fmt, if_name, "phys-address");
+            sr_val_set_xpath(&v[i_v], xpath);
+            sr_val_set_str_data(&v[i_v], SR_STRING_T, buf);
+            i_v++;
+
+            printf("i_v %d\n", i_v);
+            /* speed */
+            uint64_t speed = 0;
+            int_from_cmd(cmd_speed, interface_name, "%lu", &speed);
+            printf("speed %llu\n", speed);
+            sprintf(xpath, xpath_fmt, if_name, "speed");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT64_T;
+            v[i_v].data.uint64_val = speed;
+            i_v++;
+
+            printf("i_v %d\n", i_v);
+            /* statistics */
+            *values = v;
+
+        } else if (sr_xpath_node_name_eq(xpath, "statistics")) {
+
+            *values_cnt = 4;
+
+            rc = sr_new_values(*values_cnt, &v);
+            if (SR_ERR_OK != rc) {
+                return rc;
+            }
+
+            uint64_t tx = 0;
+            int_from_cmd(cmd_tx, interface_name, "%lu", &tx);
+            sprintf(xpath, xpath_fmt, if_name, "statistics/out-octets");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT64_T;
+            v[i_v].data.uint64_val = tx;
+            i_v++;
+
+            uint32_t tx_err = 0;
+            int_from_cmd(cmd_tx_err, interface_name, "%lu", &tx_err);
+            sprintf(xpath, xpath_fmt, if_name, "statistics/out-errors");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT32_T;
+            v[i_v].data.uint32_val = tx_err;
+            i_v++;
+
+            uint64_t rx = 0;
+            int_from_cmd(cmd_rx, interface_name, "%lu", &rx);
+            sprintf(xpath, xpath_fmt, if_name, "statistics/in-octets");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT64_T;
+            v[i_v].data.uint64_val = rx;
+            i_v++;
+
+            uint32_t rx_err = 0;
+            int_from_cmd(cmd_rx_err, interface_name, "%lu", &rx_err);
+            sprintf(xpath, xpath_fmt, if_name, "statistics/in-errors");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT32_T;
+            v[i_v].data.uint32_val = rx_err;
+            i_v++;
+
+            *values = v;
+
+        } else if (sr_xpath_node_name_eq(xpath, "ipv4")) {
+
+            *values_cnt = 1;
+
+            rc = sr_new_values(*values_cnt, &v);
+            if (SR_ERR_OK != rc) {
+                return rc;
+            }
+
+            uint16_t mtu = 0;
+            int_from_cmd(cmd_mtu, interface_name, "%lu", &mtu);
+            mtu = (uint16_t) mtu;
+            sprintf(xpath, xpath_fmt, if_name, "statistics/ipv4/mtu");
+            sr_val_set_xpath(&v[i_v], xpath);
+            v[i_v].type = SR_UINT16_T;
+            v[i_v].data.uint16_val = mtu;
+            i_v++;
+            printf("MTU: %hu\n", mtu);
+            *values = v;
+
+        } else {
+            /* ipv4 and ipv6 nested containers not implemented in this example */
+            *values = NULL;
+            values_cnt = 0;
         }
+        printf("Data for '%s' requested.\n", xpath);
 
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/type");
-        sr_val_set_str_data(&v[i_v], SR_IDENTITYREF_T, "ethernetCsmacd");
-        i_v++;
-
-        printf("i_v %d\n", i_v);
-        /* oper-status */
-        char buf[BUFSIZE] = { 0 };
-        str_from_cmd(cmd_enabled, interface_name, "%s", buf);
-        printf("buf %s\n", buf);
-
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/oper-status");
-        sr_val_set_str_data(&v[i_v], SR_ENUM_T, buf);
-        i_v++;
-
-        printf("i_v %d\n", i_v);
-        /* last change */
-
-        /* phys address */
-        str_from_cmd(cmd_mac, interface_name, "%s", buf);
-        printf("mac %s\n", buf);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/phys-address");
-        sr_val_set_str_data(&v[i_v], SR_STRING_T, buf);
-        i_v++;
-
-        printf("i_v %d\n", i_v);
-        /* speed */
-        uint64_t speed = 0;
-        int_from_cmd(cmd_speed, interface_name, "%lu", &speed);
-        printf("speed %llu\n", speed);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/speed");
-        v[i_v].type = SR_UINT64_T;
-        v[i_v].data.uint64_val = speed;
-        i_v++;
-
-        printf("i_v %d\n", i_v);
-        /* statistics */
-        *values = v;
-
-    } else if (sr_xpath_node_name_eq(xpath, "statistics")) {
-
-        *values_cnt = 4;
-
-        rc = sr_new_values(*values_cnt, &v);
-        if (SR_ERR_OK != rc) {
-            return rc;
-        }
-
-        uint64_t tx = 0;
-        int_from_cmd(cmd_tx, interface_name, "%lu", &tx);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/out-octets");
-        v[i_v].type = SR_UINT64_T;
-        v[i_v].data.uint64_val = tx;
-        i_v++;
-
-        uint32_t tx_err = 0;
-        int_from_cmd(cmd_tx_err, interface_name, "%lu", &tx_err);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/out-errors");
-        v[i_v].type = SR_UINT32_T;
-        v[i_v].data.uint32_val = tx_err;
-        i_v++;
-
-        uint64_t rx = 0;
-        int_from_cmd(cmd_rx, interface_name, "%lu", &rx);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/in-octets");
-        v[i_v].type = SR_UINT64_T;
-        v[i_v].data.uint64_val = rx;
-        i_v++;
-
-        uint32_t rx_err = 0;
-        int_from_cmd(cmd_rx_err, interface_name, "%lu", &rx_err);
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/in-errors");
-        v[i_v].type = SR_UINT32_T;
-        v[i_v].data.uint32_val = rx_err;
-        i_v++;
-
-        *values = v;
-
-    } else if (sr_xpath_node_name_eq(xpath, "ipv4")) {
-
-        *values_cnt = 1;
-
-        rc = sr_new_values(*values_cnt, &v);
-        if (SR_ERR_OK != rc) {
-            return rc;
-        }
-
-        uint16_t mtu = 0;
-        int_from_cmd(cmd_mtu, interface_name, "%lu", &mtu);
-        mtu = (uint16_t) mtu;
-        sr_val_set_xpath(&v[i_v], "/ietf-interfaces:interfaces-state/interface[name='eth0']/statistics/ipv4/mtu");
-        v[i_v].type = SR_UINT16_T;
-        v[i_v].data.uint16_val = mtu;
-        i_v++;
-        printf("MTU: %hu\n", mtu);
-        *values = v;
-
-    } else {
-
-        /* ipv4 and ipv6 nested containers not implemented in this example */
-        *values = NULL;
-        values_cnt = 0;
     }
-    printf("Data for '%s' requested.\n", xpath);
 
     return SR_ERR_OK;
 }
@@ -357,53 +412,51 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     printf("sr_plugin_init_cb\n");
 
-    /* rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL, */
-    /*                                 0, SR_SUBSCR_DEFAULT, &subscription); */
-    /* if (SR_ERR_OK != rc) { */
-    /*     goto error; */
-    /* } */
+    rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
+                                    0, SR_SUBSCR_DEFAULT, &subscription);
+    if (SR_ERR_OK != rc) {
+        goto error;
+    }
 
     struct plugin_ctx *ctx = calloc(1, sizeof(*ctx));
     struct list_head interfaces = LIST_HEAD_INIT(interfaces);
-    struct if_interface *interface = calloc(1, sizeof(*interface));
-    interface->ipv4 = calloc(1, sizeof(struct ip_v4));
-    list_add(&interface->head, &interfaces);
-    struct if_interface *iface;
-    list_for_each_entry(iface, &interfaces, head) {
+    ctx->interfaces = &interfaces;
+    ls_interfaces(ctx);
 
+    struct if_interface *iff;
+    list_for_each_entry(iff, ctx->interfaces, head) {
+        printf("if: %s\n", iff->name);
     }
-    /* sysrepo_commit_network(session, interface); */
 
-    ls_interfaces();
+    init_config(ctx);
+    sysrepo_commit_network(session, ctx);
+    rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
+                                   SR_SUBSCR_DEFAULT, &subscription);
+    if (SR_ERR_OK != rc) {
+        fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc));
+        goto error;
+    }
+
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
+    *private_ctx = ctx;
 
-
-  /*   rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL, */
-  /*                                  SR_SUBSCR_DEFAULT, &subscription); */
-  /*   if (SR_ERR_OK != rc) { */
-  /*       fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc)); */
-  /*       goto error; */
-  /*   } */
-
-  /*   /\* set subscription as our private context *\/ */
-  /*   *private_ctx = subscription; */
-
-  /*   return SR_ERR_OK; */
+    return SR_ERR_OK;
 
   error:
-  /*   SRP_LOG_ERR("Plugin initialization failed: %s", sr_strerror(rc)); */
-  /*   sr_unsubscribe(session, subscription); */
+    SRP_LOG_ERR("Plugin initialization failed: %s", sr_strerror(rc));
+    sr_unsubscribe(session, subscription);
     return rc;
 }
 
 void
 sr_plugin_cleanup_cb(sr_session_ctx_t *session, void *private_ctx)
 {
+    if (!private_ctx) return;
+
     struct plugin_ctx *ctx = private_ctx;
+    sr_unsubscribe(session, ctx->subscription);
     if (ctx->subscription) free(ctx->subscription);
-    free(ctx->key);
     free(ctx);
-    sr_unsubscribe(session, private_ctx);
 }
 
 #ifdef TESTS
@@ -445,7 +498,7 @@ main(int argc, char *argv[])
     signal(SIGINT, sigint_handler);
     signal(SIGPIPE, SIG_IGN);
     while (!exit_application) {
-        sleep(1000);  /* or do some more useful work... */
+        sleep(1);  /* or do some more useful work... */
     }
 
   cleanup:

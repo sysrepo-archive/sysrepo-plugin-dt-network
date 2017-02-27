@@ -240,4 +240,6 @@ functions_init()
     printf("mtu = rtnl_link_get_mtu(link) -> %u\n", rtnl_link_get_mtu(link));
 
     nl_socket_free(sk);
+
+    return rc;
 }

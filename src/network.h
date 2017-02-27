@@ -98,49 +98,11 @@ struct if_interface
 {
     struct list_head head;
 
-    struct ip_v4 *ipv4;
-
-    struct iface_ipv6_s
-    {
-        bool forwarding;
-        unsigned short mtu;
-
-        struct address_ipv6            /* list */
-        {
-            char *ip;
-            uint8 prefix_length;
-            ip_addr_origin origin;
-        } address;
-
-        enum iface_status
-        {
-            PREFFERED,
-            DEPRECATED,
-            INVALID,
-            INACCESSIBLE,
-            UNKOWN,
-            TENTATIVE,
-            DUPLICATE,
-            OPTIMISTIC,
-        } status;
-
-        struct if_neighbor_v6 /* list */
-        {
-            char *ip;
-            char *link_layer_address;
-            neighbor_origin origin;
-            bool is_router;
-        } neighbor_v6;
-
-        enum iface_state
-        {
-            INCOMPLETE,
-            REACHABLE,
-            STALE,
-            DELAY,
-            PROBE,
-        } state;
-    } iface_ipv6;
+    char *name;
+    union proto {
+        struct ip_v4 *ipv4;
+        struct ip_v6 *ipv6;
+    } proto;
 };
 
 struct plugin_ctx {
