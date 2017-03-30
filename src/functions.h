@@ -4,6 +4,10 @@
 
 #include <libnl3/netlink/netlink.h>
 #include <libnl3/netlink/route/link.h>
+#include <libnl3/netlink/route/addr.h>
+#include <libnl3/netlink/route/link/inet.h>
+
+#include <libnl3/netlink/cache.h>
 #include <libnl3/netlink/netlink.h>
 #include <libnl3/netlink/genl/genl.h>
 #include <libnl3/netlink/genl/ctrl.h>
@@ -19,7 +23,26 @@ struct tc_info_entry {
     uint64_t val;
 };
 
+#define ADDR_STR_BUF_SIZE 80
+
+struct function_ctx {
+  struct nl_sock *socket;
+  struct nl_cache *cache_addr;
+  struct nl_cache *cache_link;
+};
+
+enum {
+  SRPLUG_OK,
+  SRPLUG_ADDR_CACHE_ALLOC
+};
+
+struct function_ctx *make_function_ctx();
+
+void free_function_ctx(struct function_ctx *);
+
 char *get_mac(struct rtnl_link *link);
+
+uint8_t get_prefixlen(struct function_ctx *ctx);
 
 /**
  * @brief Get statistics for an link representing interface.

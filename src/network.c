@@ -5,7 +5,7 @@
 
 #include "network.h"
 #include "scripts.h"
-#include "function.h"
+#include "functions.h"
 
 #define MODULE "/ietf-ip"
 #define XPATH_MAX_LEN 100
@@ -49,7 +49,7 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
         if (hdr->rta_type == IFLA_IFNAME) {
             iff = make_interface_ipv4((char *) RTA_DATA(hdr));
             list_add(&iff->head, interfaces);
-            /* printf("Found network interface %d: %s\n", iface->ifi_index, iff->name); */
+            printf("Found network interface %d: %s\n", iface->ifi_index, iff->name);
         }
 
         hdr = RTA_NEXT(hdr, remaining);
@@ -74,14 +74,12 @@ ls_interfaces(struct plugin_ctx *ctx)
     nl_recvmsgs_default(socket);
 }
 
-
 static int
 module_change_cb(sr_session_ctx_t *session, const char *module_name,
                  sr_notif_event_t event, void *private_ctx)
 {
     return SR_ERR_OK;
 }
-
 
 static int
 str_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, char *ptr)
@@ -199,49 +197,62 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
     return rc;
 }
 
-
-
 static int
 init_config_ipv4(struct ip_v4 *ipv4)
 {
-    FILE *fp;
-    char buf[BUFSIZE];
-    char *interface_name = ipv4->address.ip;
+    char *interface_name = "eth0";
+    struct function_ctx *fun_ctx;
 
-    if ((fp = popen(cmd_ip, "r")) == NULL) {
-        fprintf(stderr, "Error opening pipe\n");
-        return -1;
+    fun_ctx = make_function_ctx();
+
+    printf("acache %d\n", fun_ctx->cache_link);
+    struct rtnl_link *link = rtnl_link_get_by_name(fun_ctx->cache_link, interface_name);
+    if (link == NULL) {
+        fprintf(stderr, "failed to get link\n");
+        goto error;
     }
 
-    if (fgets(buf, BUFSIZE, fp) != NULL) {
-        sscanf(buf, "%s", ipv4->address.ip);
-    } else {
-        fprintf(stderr, "Error getting ip.\n");
-    }
+    // IP
+    strcpy(ipv4->address.ip, get_ip4(fun_ctx, link));
+    /* int_from_cmd(cmd_mtu, interface_name, "%hu", &ipv4->mtu); */
+    /* ipv4->mtu = (unsigned int)ipv4->mtu; */
 
-    if ((fp = popen(cmd_netmask, "r")) == NULL) {
-        fprintf(stderr, "Error opening pipe!\n");
-        return -1;
-    }
+    // MTU
+    ipv4->mtu = get_mtu(link);
 
-    if (fgets(buf, BUFSIZE, fp) != NULL) {
-        sscanf(buf, "%s", ipv4->address.subnet.netmask);
-        ipv4->address.subnet.netmask = strdup(buf);
-    } else {
-        fprintf(stderr, "Error getting netmask.\n");
-    }
+    // ENABLED (operstate?)
+    ipv4->enabled = !strcmp(get_operstate(link), "UP") ? true : false;
+    /* str_from_cmd(cmd_enabled, interface_name, "%s", buf); */
 
-    pclose(fp);
+    // PREFIX LENGTH
+    ipv4->address.subnet.prefix_length = get_prefixlen(fun_ctx);
 
-    int_from_cmd(cmd_mtu, interface_name, "%hu", &ipv4->mtu);
-    ipv4->mtu = (unsigned int)ipv4->mtu;
-    str_from_cmd(cmd_enabled, interface_name, "%s", buf);
-    ipv4->enabled = !strcmp(buf, "UP") ? true : false ;
-    int_from_cmd(cmd_forwarding, interface_name, "%d", &ipv4->forwarding);
-    str_from_cmd(cmd_origin, interface_name, "%s", buf);
-    ipv4->origin = string_to_origin(buf);
+    // FORWARDING
+    /* int_from_cmd(cmd_forwarding, interface_name, "%d", &ipv4->forwarding); */
+     
+
+    /* if ((fp = popen(cmd_netmask, "r")) == NULL) { */
+    /*     fprintf(stderr, "Error opening pipe!\n"); */
+    /*     return -1; */
+    /* } */
+
+    /* if (fgets(buf, BUFSIZE, fp) != NULL) { */
+    /*     sscanf(buf, "%s", ipv4->address.subnet.netmask); */
+    /*     ipv4->address.subnet.netmask = strdup(buf); */
+    /* } else { */
+    /*     fprintf(stderr, "Error getting netmask.\n"); */
+    /* } */
+
+
+
+    /* str_from_cmd(cmd_origin, interface_name, "%s", buf); */
+    /* ipv4->origin = string_to_origin(buf); */
+    /* free_function_ctx(fun_ctx); */
 
     return 0;
+  error:
+
+    return -1;
 }
 
 static int
@@ -249,9 +260,18 @@ init_config(struct plugin_ctx *ctx)
 {
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        if (iface->proto.ipv4) init_config_ipv4(iface->proto.ipv4);
+        if (iface->proto.ipv4 && !strcmp(iface->name, "eth0")) {
+            printf("init config %s\n", iface->name);
+            init_config_ipv4(iface->proto.ipv4);
+            printf("ip %s\n", iface->proto.ipv4->address.ip);
+            printf("mtu %u\n", iface->proto.ipv4->mtu);
+            printf("prelen %u\n", iface->proto.ipv4->address.subnet.prefix_length);
+
+        }
+
     }
 
+    fprintf(stderr, "exit init config\n");
     return 0;
 }
 
@@ -422,19 +442,20 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     ctx->interfaces = &interfaces;
     ls_interfaces(ctx);
 
+    printf("print interface list\n");
     struct if_interface *iff;
     list_for_each_entry(iff, ctx->interfaces, head) {
-        printf("if: %s\n", iff->name);
+        printf("Interface: %s\n", iff->name);
     }
 
     init_config(ctx);
-    sysrepo_commit_network(session, ctx);
-    rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
-                                   SR_SUBSCR_DEFAULT, &subscription);
-    if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc));
-        goto error;
-    }
+    /* sysrepo_commit_network(session, ctx); */
+    /* rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL, */
+    /*                                SR_SUBSCR_DEFAULT, &subscription); */
+    /* if (SR_ERR_OK != rc) { */
+    /*     fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc)); */
+    /*     goto error; */
+    /* } */
 
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
     *private_ctx = ctx;

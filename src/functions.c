@@ -1,6 +1,6 @@
-#include <inttypes.h>
-#include <unistd.h>
+#include <stdio.h>
 #include <string.h>
+#include <inttypes.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/ioctl.h>
@@ -10,57 +10,67 @@
 
 #define ADDR_STR_BUF_SIZE 80
 
-struct nl_sock *sk;
 
-struct function_ctx {
-    struct nl_sock *socket;
-    struct nl_cache *cache_addr;
-    struct nl_cache *cache_link;
-};
+char *
+get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
 
-int
-make_function_ctx(struct function_ctx *ctx)
+static int
+socket_init(struct nl_sock **socket, int protocol)
 {
-    struct nl_cache *link_cache, *addr_cache;
-    struct rtnl_link *link, *change;
-    int rc = 0;
+    int error = 0;
 
-    ctx = calloc(1, sizoef(*ctx));
-
-    rc = socket_init(ctx->socket, NETLINK_ROUTE);
-    if (rc) {
-        return rc;
+    *socket = nl_socket_alloc();
+    if (socket == NULL) {
+        fprintf(stderr, "unable to allocate netlink socket for route family.");
     }
 
-    link = rtnl_link_alloc();
-    if (!link) {
-        fprintf(stderr, "link alloc null\n");
-        return -1;
+    error = nl_connect(*socket, protocol);
+    if (error < 0) {
+        fprintf(stderr, "unable to connect to route socket (%s)", nl_geterror(error));
+        goto error;
     }
-
-    change = rtnl_link_alloc();
-    if (!change) {
-        fprintf(stderr, "link alloc null\n");
-        return -1;
-    }
-
-    rc = rtnl_link_alloc_cache(ctx->socket, AF_UNSPEC, &link_cache);
-    if (rc) {
-        fprintf(stderr, "cache alloc error: %d\n", rc);
-        return -1;
-
-    }
-
-    rc = rtnl_addr_alloc_cache(ctx->socket, &addr_cache);
-    if (rc != 0) {
-      printf("cant allocate addr cache: %d\n", rc);
-        return NULL;
-    }
-
-    ctx->cache_addr = cache_addr;
-    ctx->cache_link = cache_link;
 
     return 0;
+  error:
+    nl_socket_free(*socket);
+
+    return error;
+}
+
+struct function_ctx *
+make_function_ctx()
+{
+    /* struct nl_cache *link_cache, *addr_cache; */
+    struct function_ctx *hctx;
+    int rc = 0;
+
+    hctx = calloc(1, sizeof(*hctx));
+
+
+    struct nl_sock *sk;
+    rc = socket_init(&sk, NETLINK_ROUTE);
+    if (rc) {
+        fprintf(stderr, "socket not initialized\n");
+        goto error;
+    }
+    hctx->socket = sk;
+
+    rc = rtnl_link_alloc_cache(hctx->socket, AF_UNSPEC, &(hctx->cache_link));
+    if (rc) {
+        fprintf(stderr, "cache alloc error: %d\n", rc);
+        goto error;
+    }
+
+    rc = rtnl_addr_alloc_cache(hctx->socket, &(hctx->cache_addr));
+    if (rc != 0) {
+        printf("cant allocate addr cache: %d\n", rc);
+        goto error;
+    }
+
+    return hctx;
+  error:
+    free(hctx);
+    return NULL;
 }
 
 void
@@ -71,12 +81,30 @@ free_function_ctx(struct function_ctx *ctx)
 }
 
 void
+get_prefixlen_cb(struct nl_object *nlobj, void *data)
+{
+    uint8_t *res = data;
+    uint8_t prefixlen = (uint8_t) rtnl_addr_get_prefixlen((struct rtnl_addr *) nlobj);
+    *res = prefixlen;
+}
+
+
+uint8_t
+get_prefixlen(struct function_ctx *ctx)
+{
+    uint8_t prefixlen;
+    nl_cache_foreach(ctx->cache_addr, get_prefixlen_cb, (void*) &prefixlen);
+    return prefixlen;
+}
+
+void
 get_ip4_cb(struct nl_object *nlobj, void *data)
 {
     struct {
         int ifindex;
         char result_addr[80];
     } *msg = data;
+
     int ifindex = msg->ifindex;
     struct rtnl_addr *addr = (struct rtnl_addr *) nlobj;
     int ifindex_cur;
@@ -98,19 +126,25 @@ get_ip4_cb(struct nl_object *nlobj, void *data)
 }
 
 char *
-get_ip4(struct rtnl_link *link)
+get_ip4(struct function_ctx *ctx, struct rtnl_link *link)
 {
-   int ifindex = rtnl_link_get_ifindex(link);
+    struct nl_cache *addr_cache;
+
+    int ifindex = rtnl_link_get_ifindex(link);
+
+    printf("interface with index %d\n", ifindex);
 
     struct {
         int ifindex;
         char result_addr[80];
     } *msg;
 
+    rtnl_addr_alloc_cache(ctx->socket, &addr_cache);
     msg = calloc(1, sizeof(*msg));
     msg->ifindex = ifindex;
 
-    nl_cache_foreach(addr_cache, get_ip4_cb, (void*)msg);
+    printf("cache_addr %d\n", ctx->cache_addr);
+    nl_cache_foreach(ctx->cache_addr, get_ip4_cb, (void*)msg);
 
     char *res = strdup(msg->result_addr);
 
@@ -205,7 +239,19 @@ set_mtu(struct rtnl_link *link, uint16_t mtu)
 uint16_t
 get_mtu(struct rtnl_link *link)
 {
-    return (uint16_t) rtnl_link_get_mtu(link);
+    unsigned int mtu =rtnl_link_get_mtu(link);// (uint16_t) rtnl_link_get_mtu(link);
+
+    return mtu;
+}
+
+uint32_t
+get_forwarding(struct rtnl_link *link)
+{
+    uint32_t value;
+    const int IPV4_DEVCONF_FORWARDING = 1;
+    rtnl_link_inet_get_conf(link, IPV4_DEVCONF_FORWARDING, &value);
+    printf("forwarding %u\n", value);
+    return value;
 }
 
 void
@@ -222,7 +268,6 @@ get_operstate(struct rtnl_link *link)
 
     int flag = rtnl_link_get_flags(link);
     rtnl_link_flags2str(flag, buf, sizeof(buf));
-    printf("flags: %s[%d]\n", buf, flag);
 
     operstate_code = rtnl_link_get_operstate(link);
     rtnl_link_operstate2str(operstate_code, buf, sizeof(buf));
@@ -231,77 +276,55 @@ get_operstate(struct rtnl_link *link)
 }
 
 /* Callback used for applying changes to cache. */
-static void
-set_cb(struct nl_object *obj, void *arg)
-{
-    struct rtnl_link *link = nl_object_priv(obj);
-    struct rtnl_link *change = arg;
-    struct nl_dump_params params = {
-        .dp_type = NL_DUMP_LINE,
-        .dp_fd = stdout,
-    };
-    int err;
+/* static void */
+/* set_cb(struct nl_object *obj, void *arg) */
+/* { */
+/*     struct rtnl_link *link = nl_object_priv(obj); */
+/*     struct rtnl_link *change = arg; */
+/*     struct nl_dump_params params = { */
+/*         .dp_type = NL_DUMP_LINE, */
+/*         .dp_fd = stdout, */
+/*     }; */
+/*     int err; */
 
-    if ((err = rtnl_link_change(sk, link, change, 0)) < 0)
-        fprintf(stderr, "Unable to change link: %s",
-                nl_geterror(err));
+/*     if ((err = rtnl_link_change(sk, link, change, 0)) < 0) */
+/*         fprintf(stderr, "Unable to change link: %s", */
+/*                 nl_geterror(err)); */
 
-    printf("Changed ");
-    nl_object_dump(OBJ_CAST(link), &params);
-}
+/*     printf("Changed "); */
+/*     nl_object_dump(OBJ_CAST(link), &params); */
+/* } */
 
 
-
-static int
-socket_init(struct nl_sock **socket, int protocol)
-{
-    int error = 0;
-
-    // alloc nl socket for route family
-    *socket = nl_socket_alloc();
-    if (socket == NULL) {
-        fprintf(stderr, "unable to allocate netlink socket for route family.");
-        return -1;
-    }
-
-    // connect to socket on route family
-    error = nl_connect(*socket, protocol);
-    if (error < 0) {
-        fprintf(stderr, "unable to connect to route socket (%s)", nl_geterror(error));
-        nl_socket_free(*socket);
-        return -1;
-    }
-
-    return 0;
-}
 
 int
 functions_init()
 {
-    char *if_name = "enp3s0";
-    link = rtnl_link_get_by_name(link_cache, if_name);
-    uint16_t mtu = get_mtu(link);
-    printf("mtu: %hu\n", mtu);
+    int rc = SRPLUG_OK;
+    /* char *if_name = "enp3s0"; */
+    /* link = rtnl_link_get_by_name(link_cache, if_name); */
+    /* uint16_t mtu = get_mtu(link); */
+    /* printf("mtu: %hu\n", mtu); */
 
-    rc = set_mtu(link, 1300u);
-    printf("mtu: %hu\n", get_mtu(link));
+    /* rc = set_mtu(link, 1300u); */
+    /* printf("mtu: %hu\n", get_mtu(link)); */
 
-    char *operstate = get_operstate(link);
-    printf("operstate: %s\n", operstate);
+    /* char *operstate = get_operstate(link); */
+    /* printf("operstate: %s\n", operstate); */
 
-    get_tc_info(link);
+    /* get_tc_info(link); */
 
-    char buf[SIZE_BUF];
+    /* char buf[SIZE_BUF]; */
 
-    /* struct cache_context *nctx; */
-    /* nctx = calloc(1, sizeof(*nctx)); */
-    /* nl_cache_init(sk, nctx); */
-    /* nl_get_ipv4(nctx, buf); */
+    /* /\* struct cache_context *nctx; *\/ */
+    /* /\* nctx = calloc(1, sizeof(*nctx)); *\/ */
+    /* /\* nl_cache_init(sk, nctx); *\/ */
+    /* /\* nl_get_ipv4(nctx, buf); *\/ */
 
-    char *mac = get_mac(link);
-    printf("mac: %s\n", mac);
+    /* char *mac = get_mac(link); */
+    /* printf("mac: %s\n", mac); */
 
-    char *ipv4 = get_ip4(link);
+    /* char *ipv4 = get_ip4(link); */
 
 
     /* What to do? */
@@ -310,7 +333,28 @@ functions_init()
 
     /* nl_cache_foreach_filter(link_cache, OBJ_CAST(link), set_cb, change); */
 
-    nl_socket_free(sk);
+    /* nl_socket_free(sk); */
 
     return rc;
+}
+
+int
+main(int argc, char *argv[])
+{
+    fprintf(stderr, "main started\n");
+    struct nl_cache *link_cache, *addr_cache;
+    struct function_ctx *ctx;
+    int rc = 0;
+    ctx = make_function_ctx();
+    if (rc) {
+        fprintf(stderr, "make function context fail %d (ctx==NULL %d)\n", rc, ctx==NULL);
+    }
+    link_cache = ctx->cache_link;
+    addr_cache = ctx->cache_addr;
+    struct rtnl_link *link = rtnl_link_get_by_name(link_cache, "enp3s0");
+    int ifindex = rtnl_link_get_ifindex(link);
+
+    const char *ip = get_ip4(ctx, link);
+    free(ctx);
+
 }
