@@ -2,11 +2,10 @@
 
 #include <stdio.h>
 #include <syslog.h>
-#include <libnl3/netlink/netlink.h>
-#include <libnl3/netlink/genl/genl.h>
 
 #include "network.h"
 #include "scripts.h"
+#include "function.h"
 
 #define MODULE "/ietf-ip"
 #define XPATH_MAX_LEN 100
