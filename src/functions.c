@@ -239,7 +239,7 @@ set_mtu(struct rtnl_link *link, uint16_t mtu)
 uint16_t
 get_mtu(struct rtnl_link *link)
 {
-    unsigned int mtu =rtnl_link_get_mtu(link);// (uint16_t) rtnl_link_get_mtu(link);
+    unsigned int mtu = rtnl_link_get_mtu(link);
 
     return mtu;
 }
@@ -249,8 +249,9 @@ get_forwarding(struct rtnl_link *link)
 {
     uint32_t value;
     const int IPV4_DEVCONF_FORWARDING = 1;
+
     rtnl_link_inet_get_conf(link, IPV4_DEVCONF_FORWARDING, &value);
-    printf("forwarding %u\n", value);
+
     return value;
 }
 

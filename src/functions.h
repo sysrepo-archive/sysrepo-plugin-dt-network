@@ -44,6 +44,8 @@ char *get_mac(struct rtnl_link *link);
 
 uint8_t get_prefixlen(struct function_ctx *ctx);
 
+uint32_t get_forwarding(struct rtnl_link *link);
+
 /**
  * @brief Get statistics for an link representing interface.
  *

@@ -202,6 +202,7 @@ init_config_ipv4(struct ip_v4 *ipv4)
 {
     char *interface_name = "eth0";
     struct function_ctx *fun_ctx;
+    char buf[BUFSIZE];
 
     fun_ctx = make_function_ctx();
 
@@ -214,44 +215,28 @@ init_config_ipv4(struct ip_v4 *ipv4)
 
     // IP
     strcpy(ipv4->address.ip, get_ip4(fun_ctx, link));
-    /* int_from_cmd(cmd_mtu, interface_name, "%hu", &ipv4->mtu); */
-    /* ipv4->mtu = (unsigned int)ipv4->mtu; */
 
     // MTU
     ipv4->mtu = get_mtu(link);
 
     // ENABLED (operstate?)
     ipv4->enabled = !strcmp(get_operstate(link), "UP") ? true : false;
-    /* str_from_cmd(cmd_enabled, interface_name, "%s", buf); */
 
     // PREFIX LENGTH
     ipv4->address.subnet.prefix_length = get_prefixlen(fun_ctx);
 
     // FORWARDING
-    /* int_from_cmd(cmd_forwarding, interface_name, "%d", &ipv4->forwarding); */
-     
+    ipv4->forwarding = get_forwarding(link);
 
-    /* if ((fp = popen(cmd_netmask, "r")) == NULL) { */
-    /*     fprintf(stderr, "Error opening pipe!\n"); */
-    /*     return -1; */
-    /* } */
+    // ORIGIN (uci)
+    str_from_cmd(cmd_origin, interface_name, "%s", buf);
+    ipv4->origin = string_to_origin(buf);
 
-    /* if (fgets(buf, BUFSIZE, fp) != NULL) { */
-    /*     sscanf(buf, "%s", ipv4->address.subnet.netmask); */
-    /*     ipv4->address.subnet.netmask = strdup(buf); */
-    /* } else { */
-    /*     fprintf(stderr, "Error getting netmask.\n"); */
-    /* } */
-
-
-
-    /* str_from_cmd(cmd_origin, interface_name, "%s", buf); */
-    /* ipv4->origin = string_to_origin(buf); */
-    /* free_function_ctx(fun_ctx); */
+    free_function_ctx(fun_ctx);
 
     return 0;
-  error:
 
+  error:
     return -1;
 }
 
@@ -261,14 +246,9 @@ init_config(struct plugin_ctx *ctx)
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
         if (iface->proto.ipv4 && !strcmp(iface->name, "eth0")) {
-            printf("init config %s\n", iface->name);
+            fprintf(stderr, "init config %s\n", iface->name);
             init_config_ipv4(iface->proto.ipv4);
-            printf("ip %s\n", iface->proto.ipv4->address.ip);
-            printf("mtu %u\n", iface->proto.ipv4->mtu);
-            printf("prelen %u\n", iface->proto.ipv4->address.subnet.prefix_length);
-
         }
-
     }
 
     fprintf(stderr, "exit init config\n");
@@ -449,7 +429,7 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     }
 
     init_config(ctx);
-    /* sysrepo_commit_network(session, ctx); */
+    sysrepo_commit_network(session, ctx);
     /* rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL, */
     /*                                SR_SUBSCR_DEFAULT, &subscription); */
     /* if (SR_ERR_OK != rc) { */
