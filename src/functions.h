@@ -72,7 +72,8 @@ void print_tc_info(struct tc_info_entry *tc_info, uint32_t count);
  */
 void get_tc_info(struct rtnl_link *link);
 
-int get_ip(char *if_name, char *ipv4);
+char *get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
+
 void set_ip(char *ipv4);
 
 /**

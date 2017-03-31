@@ -11,8 +11,8 @@
 #define ADDR_STR_BUF_SIZE 80
 
 
-char *
-get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
+/* char * */
+/* get_ip4(struct function_ctx *ctx, struct rtnl_link *link); */
 
 static int
 socket_init(struct nl_sock **socket, int protocol)
@@ -132,8 +132,6 @@ get_ip4(struct function_ctx *ctx, struct rtnl_link *link)
 
     int ifindex = rtnl_link_get_ifindex(link);
 
-    printf("interface with index %d\n", ifindex);
-
     struct {
         int ifindex;
         char result_addr[80];
@@ -143,7 +141,6 @@ get_ip4(struct function_ctx *ctx, struct rtnl_link *link)
     msg = calloc(1, sizeof(*msg));
     msg->ifindex = ifindex;
 
-    printf("cache_addr %d\n", ctx->cache_addr);
     nl_cache_foreach(ctx->cache_addr, get_ip4_cb, (void*)msg);
 
     char *res = strdup(msg->result_addr);
@@ -339,23 +336,23 @@ functions_init()
     return rc;
 }
 
-int
-main(int argc, char *argv[])
-{
-    fprintf(stderr, "main started\n");
-    struct nl_cache *link_cache, *addr_cache;
-    struct function_ctx *ctx;
-    int rc = 0;
-    ctx = make_function_ctx();
-    if (rc) {
-        fprintf(stderr, "make function context fail %d (ctx==NULL %d)\n", rc, ctx==NULL);
-    }
-    link_cache = ctx->cache_link;
-    addr_cache = ctx->cache_addr;
-    struct rtnl_link *link = rtnl_link_get_by_name(link_cache, "enp3s0");
-    int ifindex = rtnl_link_get_ifindex(link);
+/* int */
+/* main(int argc, char *argv[]) */
+/* { */
+/*     fprintf(stderr, "main started\n"); */
+/*     struct nl_cache *link_cache, *addr_cache; */
+/*     struct function_ctx *ctx; */
+/*     int rc = 0; */
+/*     ctx = make_function_ctx(); */
+/*     if (rc) { */
+/*         fprintf(stderr, "make function context fail %d (ctx==NULL %d)\n", rc, ctx==NULL); */
+/*     } */
+/*     link_cache = ctx->cache_link; */
+/*     addr_cache = ctx->cache_addr; */
+/*     struct rtnl_link *link = rtnl_link_get_by_name(link_cache, "enp3s0"); */
+/*     int ifindex = rtnl_link_get_ifindex(link); */
 
-    const char *ip = get_ip4(ctx, link);
-    free(ctx);
+/*     const char *ip = get_ip4(ctx, link); */
+/*     free(ctx); */
 
-}
+/* } */
