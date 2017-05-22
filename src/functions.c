@@ -68,6 +68,7 @@ make_function_ctx()
     }
 
     return hctx;
+
   error:
     free(hctx);
     return NULL;
@@ -150,6 +151,37 @@ get_ip4(struct function_ctx *ctx, struct rtnl_link *link)
     return res;
 }
 
+int
+set_ip(struct uci_context *uctx, char *ifname, char *ip)
+{
+
+    int rc = UCI_OK;
+    char path[MAX_UCI_PATH];
+    struct uci_element *e;
+    struct uci_section *s;
+    struct uci_option *o;
+    struct uci_ptr ptr;
+    struct uci_package *up = uctx->backend->load(uctx, "network");
+    if (up == NULL) return -1;
+
+    uci_foreach_element(&up->sections, e)
+    {
+        s =  uci_to_section(e);
+        /* check ... */
+        o = uci_lookup_option(uctx, s, "ipaddr");
+        /* check ... */
+        char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
+        sprintf(path, path_fmt, s->type, ifname);
+
+        rc = uci_lookup_ptr(uctx, &ptr, path, true);
+        rc = uci_set(uctx, &ptr);
+        rc = uci_save(uctx, ptr.p);
+        rc = uci_commit(uctx, &(ptr.p), false);
+    }
+
+    return rc;
+}
+
 char *
 get_mac(struct rtnl_link *link)
 {
@@ -215,10 +247,6 @@ get_tc_info(struct rtnl_link *link)
     }
 }
 
-void
-set_ip(char *ipv4)
-{
-}
 
 int
 set_mtu(struct rtnl_link *link, uint16_t mtu)

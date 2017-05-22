@@ -5,7 +5,6 @@
 
 #include "network.h"
 #include "scripts.h"
-#include "functions.h"
 
 #define MODULE "/ietf-ip"
 #define XPATH_MAX_LEN 100
@@ -75,7 +74,8 @@ ls_interfaces(struct plugin_ctx *ctx)
 }
 
 static void
-print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val) {
+print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val)
+{
     switch(op) {
     case SR_OP_CREATED:
         if (NULL != new_val) {
@@ -150,6 +150,10 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     sr_val_t *new_value = NULL;
     char change_path[XPATH_MAX_LEN] = {0,};
 
+    /* if (SR_EV_VERIFY == event) { */
+    /*   SRP_LOG_DBG_MSG("Verify callback - always returns ok"); */
+    /*   return SR_ERR_OK; */
+    /* } */
 
     printf("\n\n ========== Notification  %s =============================================", ev_to_str(event));
     if (SR_EV_APPLY == event) {
@@ -172,11 +176,15 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
                 &oper, &old_value, &new_value))) {
         print_change(oper, old_value, new_value);
 
-        if (oper == SR_OP_MODIFIED) {
-            uint16_t mtu_new = new_value->data.uint16_val;
-            if ((SR_EV_VERIFY == event) && (mtu_new > 1600 || mtu_new < 1000)) {
-                return SR_ERR_VALIDATION_FAILED;
-            }
+        if (oper == SR_OP_MODIFIED || oper == SR_OP_CREATED) {
+
+            /* bool eq = sr_xpath_node_name_eq(new_value->xpath, "type"); */
+            fprintf(stderr, "enabled chaged? %s\n", sr_xpath_node_name(new_value->xpath));
+
+            uint16_t mtu_new = new_value->data.uint16_val; /* for testing purposes */
+            /* if ((SR_EV_VERIFY == event) && (mtu_new > 1600 || mtu_new < 1000)) { */
+            /*     return SR_ERR_VALIDATION_FAILED; */
+            /* } */
             if (SR_EV_ABORT == event) {
                 fprintf(stderr, "\nCUSTOM WARNING: Please set mtu between 1000 and 1600.\n");
             }
@@ -214,9 +222,10 @@ str_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, char *ptr)
         sscanf(buf, fmt, ptr);
     } else {
         fprintf(stderr, "Error running %s command.\n", cmd);
+        return -1;
     }
 
-    rc= pclose(fp);
+    rc = pclose(fp);
 
     return rc;
 }
@@ -249,6 +258,117 @@ int_from_cmd(const char *cmd, const char *cmd_arg, const char *fmt, void *ptr)
     return rc;
 }
 
+/*
+ * Takes configuration from the datastore and fills in the context.
+ */
+static int
+sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
+{
+    char xpath[XPATH_MAX_LEN];
+    sr_val_t *val= NULL;
+    int rc = SR_ERR_OK;
+    const char *xpath_fmt = "/ietf-interfaces:interfaces/interface[name='%s']/%s";
+    const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
+
+
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+
+        /* enabled */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "enabled");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->enabled = val->data.bool_val;
+        }
+
+        /* forwarding */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "forwarding");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->forwarding = val->data.bool_val;
+        }
+
+        /* origin */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "origin");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->origin = string_to_origin(val->data.enum_val);
+        }
+
+        /* MTU */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "mtu");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->mtu = val->data.uint16_val;
+        }
+
+        /* ip */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/ip");
+        sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.ip);
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            strcpy(iface->proto.ipv4->address.ip, val->data.string_val);
+        }
+
+        /* prefix length */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/prefix_length");
+        sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.subnet.prefix_length);
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->address.subnet.prefix_length = val->data.uint8_val;
+        }
+
+        /* TODO neighbor */
+
+     }
+
+    sr_free_val(val);
+
+    return rc;
+}
+
+/* Apply functions to update the system with data from run-time context. */
+static int
+apply_context(struct plugin_ctx *ctx)
+{
+    int rc = SR_ERR_OK;
+
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+
+        struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name);
+
+        /* enabled */
+        set_operstate(link, iface->proto.ipv4->enabled);
+
+        /* forwarding */
+        set_forwarding(link, iface->proto.ipv4->forwarding);
+
+        /* origin */
+        set_origin(link, iface->proto.ipv4->origin);
+
+        /* MTU */
+        set_mtu(link, iface->proto.ipv4->mtu);
+
+        /* ip */
+        set_ip(ctx->uctx, iface->name, iface->proto.ipv4->address.ip);
+
+        /* prefix length */
+        set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length);
+
+        /* TODO neighbor */
+
+     }
+
+    /* sr  commit */
+    /* uci commit */
+    /* restart uci service */
+
+
+    return rc;
+}
+
+/* Fill running datastore with run-time context information. */
 static int
 sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 {
@@ -257,24 +377,28 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
     const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
     int rc = SR_ERR_OK;
     sr_val_t val = { 0 };
+    SRP_LOG_DBG_MSG("Sysrepo commit network");
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        /* if (strcmp(iface->name, "eth0")) { break; }; */
+        if (strcmp(iface->name, "eth0")) { break; };
 
         sprintf(xpath, xpath_fmt, iface->name, "type");
         val.type = SR_IDENTITYREF_T;
-        val.data.identityref_val = "interface-type";
+        val.data.identityref_val = "iana-if-type:ethernetCsmacd";
+        sr_val_set_xpath(&val, xpath);
+        fprintf(stderr, "== Sysrepo commit network - set_item %s\n", xpath);
+        sr_print_val_stream(stderr, &val);
         rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
 
         if (SR_ERR_OK != rc) {
-            fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
+            fprintf(stderr, "Error by sr_set_item: %s for %s\n", sr_strerror(rc), xpath);
             goto cleanup;
         }
 
         /* Set forwarding. */
         val.type = SR_BOOL_T;
-        val.data.bool_val = true;
+        val.data.bool_val = iface->proto.ipv4->forwarding;
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "forwarding");
         rc = sr_set_item(sess, xpath,
                          &val, SR_EDIT_DEFAULT);
@@ -309,11 +433,11 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 }
 
 static int
-init_config_ipv4(struct ip_v4 *ipv4)
+init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
 {
-    char *interface_name = "eth0";
     struct function_ctx *fun_ctx;
     char buf[BUFSIZE];
+    int rc = 0;
 
     fun_ctx = make_function_ctx();
 
@@ -339,14 +463,19 @@ init_config_ipv4(struct ip_v4 *ipv4)
     ipv4->forwarding = get_forwarding(link);
 
     // ORIGIN (uci)
-    str_from_cmd(cmd_origin, interface_name, "%s", buf);
-    ipv4->origin = string_to_origin(buf);
+    rc = str_from_cmd(cmd_origin, interface_name, "%s", buf);
+    if (rc == 0) {
+        ipv4->origin = string_to_origin(buf);
+    } else {
+        fprintf(stderr, "No 'origin' in uci file.\n");
+
+    }
 
     free_function_ctx(fun_ctx);
-
     return 0;
 
   error:
+    free_function_ctx(fun_ctx);
     return -1;
 }
 
@@ -355,8 +484,9 @@ init_config(struct plugin_ctx *ctx)
 {
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        if (iface->proto.ipv4 && !strcmp(iface->name, "eth0")) {
-            init_config_ipv4(iface->proto.ipv4);
+        if (iface->proto.ipv4) {
+            fprintf(stderr, "DO IT!\n");
+            init_config_ipv4(iface->proto.ipv4, iface->name);
         }
     }
 
@@ -519,6 +649,7 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     sr_log_stderr(SR_LL_DBG);
 
     printf("sr_plugin_init_cb\n");
+    printf("pid = %d\n", getpid());
 
     rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
                                     0, SR_SUBSCR_DEFAULT, &subscription);
@@ -538,7 +669,6 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     }
 
     init_config(ctx);
-
     sysrepo_commit_network(session, ctx);
 
     rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
@@ -562,12 +692,16 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 void
 sr_plugin_cleanup_cb(sr_session_ctx_t *session, void *private_ctx)
 {
+    SRP_LOG_DBG_MSG("Plugin cleanup called");
     if (!private_ctx) return;
 
     struct plugin_ctx *ctx = private_ctx;
     sr_unsubscribe(session, ctx->subscription);
     if (ctx->subscription) free(ctx->subscription);
+    free_function_ctx(ctx->fctx);
     free(ctx);
+
+    SRP_LOG_DBG_MSG("Plugin cleaned-up successfully");
 }
 
 #ifdef TESTS

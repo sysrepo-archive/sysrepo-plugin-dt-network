@@ -14,7 +14,10 @@
 #include <libnl3/netlink/addr.h>
 #include <linux/nl80211.h>
 
+#include <uci.h>
+
 #define SIZE_BUF 64
+#define MAX_UCI_PATH 64
 #define MAX_MTU 1500
 #define MIN_MTU 46
 
@@ -74,7 +77,7 @@ void get_tc_info(struct rtnl_link *link);
 
 char *get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
 
-void set_ip(char *ipv4);
+int set_ip(struct uci_context *uctx, char *ifname, char *ip);
 
 /**
  * @brief Get MTU for an interface.

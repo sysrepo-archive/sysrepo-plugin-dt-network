@@ -2,10 +2,13 @@
 
 #include <stdbool.h>
 #include <libubox/list.h>
+
 #include "sysrepo.h"
 #include "sysrepo/values.h"
 #include "sysrepo/xpath.h"
 #include "sysrepo/plugins.h"
+
+#include "functions.h"
 
 #define IP_SIZE 15
 
@@ -20,15 +23,47 @@ typedef enum ip_addr_origin_s
     IP_ADDR_ORIGIN_RANDOM,
 } ip_addr_origin;
 
-ip_addr_origin string_to_origin(const char *str)
+ip_addr_origin
+string_to_origin(const char *str)
 {
     ip_addr_origin rc = IP_ADDR_ORIGIN_OTHER;
+
+    if (!strcmp(str, "other") || !strcmp(str, "'other'")) {
+        rc = IP_ADDR_ORIGIN_OTHER;
+    }
 
     if (!strcmp(str, "static") || !strcmp(str, "'static'")) {
         rc = IP_ADDR_ORIGIN_STATIC;
     }
 
+    if (!strcmp(str, "dhcp") || !strcmp(str, "'dhcp'")) {
+        rc = IP_ADDR_ORIGIN_DHCP;
+    }
+
+    if (!strcmp(str, "link_layer") || !strcmp(str, "'link_layer'")) {
+        rc = IP_ADDR_ORIGIN_LINK_LAYER;
+    }
+
+    if (!strcmp(str, "random") || !strcmp(str, "'random'")) {
+        rc = IP_ADDR_ORIGIN_RANDOM;
+    }
+
     return rc;
+}
+
+char *
+origin_to_string(ip_addr_origin origin)
+{
+    switch(origin) {
+    case IP_ADDR_ORIGIN_OTHER: return "other";
+    case IP_ADDR_ORIGIN_STATIC: return "static";
+    case IP_ADDR_ORIGIN_DHCP: return "dhcp";
+    case IP_ADDR_ORIGIN_LINK_LAYER: return "link-layer";
+    case IP_ADDR_ORIGIN_RANDOM: return "random";
+    };
+
+    /* Should not be reachable. */
+    return NULL;
 }
 
 typedef enum neighbor_origin_s
@@ -109,4 +144,6 @@ struct plugin_ctx {
     struct list_head *interfaces;
     char *key;                  /* interface name */
     sr_subscription_ctx_t *subscription;
+    struct function_ctx *fctx;  /* context for using libnl functions */
+    struct uci_context *uctx;       /* initialization TODO ? */
 };
