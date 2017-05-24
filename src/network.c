@@ -12,6 +12,7 @@
 #define MAX_INTERFACES 10
 #define MAX_INTERFACE_NAME 10
 
+static int sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx);
 
 static struct if_interface *
 make_interface_ipv4(char *name)
@@ -56,6 +57,56 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
 
     return NL_OK;
 }
+
+
+/* Find interface type using interface name. */
+static const char *
+find_interface_type(struct uci_context *uctx, char *ifname)
+{
+    int rc = UCI_OK;
+    char path[MAX_UCI_PATH];
+    struct uci_element *e;
+    struct uci_section *s;
+    struct uci_option *o;
+    struct uci_ptr ptr;
+    struct uci_package *up = uctx->backend->load(uctx, "network");
+    char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
+
+    if (up == NULL) {
+        rc = -1;
+        goto error;
+    }
+
+    uci_foreach_element(&up->sections, e) {
+
+        s =  uci_to_section(e);
+        if (!s) {
+            rc = UCI_ERR_UNKNOWN;
+            goto error;
+        }
+        o = uci_lookup_option(uctx, s, "ipaddr");
+
+        if (o && (0 == strcmp(ifname, o->v.string))) {                /* interface name found */
+            return o->v.string;
+        }
+   }
+
+  error:
+    return NULL;
+}
+
+/* Set (UCI) interface type of for each interface. */
+/* static void */
+/* set_interface_types(struct plugin_ctx *ctx) */
+/* { */
+/*     struct if_interface *iface; */
+/*     list_for_each_entry(iface, ctx->interfaces, head) { */
+/*         const char *iftype = find_interface_type(ctx->uctx, iface->name); */
+/*         if (iftype) { */
+/*             iface->type = strdup(iftype); */
+/*         } */
+/*     } */
+/* } */
 
 /* Initialize list of interfaces for given context (with ipv4 kind of interfaces). */
 static void
@@ -172,27 +223,34 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
         goto cleanup;
     }
 
-    while (SR_ERR_OK == (rc = sr_get_change_next(session, it,
-                &oper, &old_value, &new_value))) {
-        print_change(oper, old_value, new_value);
+    /* while (SR_ERR_OK == (rc = sr_get_change_next(session, it, */
+    /*             &oper, &old_value, &new_value))) { */
+    /*     print_change(oper, old_value, new_value); */
 
-        if (oper == SR_OP_MODIFIED || oper == SR_OP_CREATED) {
+    /*     if (oper == SR_OP_MODIFIED || oper == SR_OP_CREATED) { */
 
-            /* bool eq = sr_xpath_node_name_eq(new_value->xpath, "type"); */
-            fprintf(stderr, "enabled chaged? %s\n", sr_xpath_node_name(new_value->xpath));
+    /*         /\* bool eq = sr_xpath_node_name_eq(new_value->xpath, "type"); *\/ */
+    /*         fprintf(stderr, "enabled chaged? %s\n", sr_xpath_node_name(new_value->xpath)); */
 
-            uint16_t mtu_new = new_value->data.uint16_val; /* for testing purposes */
-            /* if ((SR_EV_VERIFY == event) && (mtu_new > 1600 || mtu_new < 1000)) { */
-            /*     return SR_ERR_VALIDATION_FAILED; */
-            /* } */
-            if (SR_EV_ABORT == event) {
-                fprintf(stderr, "\nCUSTOM WARNING: Please set mtu between 1000 and 1600.\n");
-            }
-        }
+    /*         uint16_t mtu_new = new_value->data.uint16_val; /\* for testing purposes *\/ */
+    /*         /\* if ((SR_EV_VERIFY == event) && (mtu_new > 1600 || mtu_new < 1000)) { *\/ */
+    /*         /\*     return SR_ERR_VALIDATION_FAILED; *\/ */
+    /*         /\* } *\/ */
+    /*         if (SR_EV_ABORT == event) { */
+    /*             fprintf(stderr, "\nCUSTOM WARNING: Please set mtu between 1000 and 1600.\n"); */
+    /*         } */
+    /*     } */
 
-        sr_free_val(old_value);
-        sr_free_val(new_value);
+    /*     sr_free_val(old_value); */
+    /*     sr_free_val(new_value); */
+    /* } */
+    struct plugin_ctx *ctx = private_ctx;
+    if (!ctx) {
+      fprintf(stderr, "KOji k gdje je ctx?\n");
     }
+
+    sysrepo_get_config(session, ctx);
+    
     printf("\n\n ========== END OF CHANGES =======================================\n\n");
 
 cleanup:
@@ -269,10 +327,12 @@ sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
     int rc = SR_ERR_OK;
     const char *xpath_fmt = "/ietf-interfaces:interfaces/interface[name='%s']/%s";
     const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
+    SRP_LOG_DBG_MSG("Sysrepo get config");
 
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
+      SRP_LOG_DBG_MSG("Sysrepo get config");
 
         /* enabled */
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "enabled");
@@ -333,28 +393,32 @@ apply_context(struct plugin_ctx *ctx)
 {
     int rc = SR_ERR_OK;
 
+    fprintf(stderr, "========= APPLY_CONTEXT==\n");
+
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-
+      SRP_LOG_DBG_MSG("apply context");
+      
         struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name);
 
         /* enabled */
         set_operstate(link, iface->proto.ipv4->enabled);
 
         /* forwarding */
-        set_forwarding(link, iface->proto.ipv4->forwarding);
+        /* set_forwarding(link, iface->proto.ipv4->forwarding); */
 
         /* origin */
-        set_origin(link, iface->proto.ipv4->origin);
+        /* set_origin(link, iface->proto.ipv4->origin); */
 
         /* MTU */
-        set_mtu(link, iface->proto.ipv4->mtu);
+        set_mtu(ctx->uctx, iface->name, iface->proto.ipv4->mtu);
+        /* set_mtu(link, iface->proto.ipv4->mtu); */
 
         /* ip */
-        set_ip(ctx->uctx, iface->name, iface->proto.ipv4->address.ip);
+        set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip);
 
         /* prefix length */
-        set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length);
+        /* set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length); */
 
         /* TODO neighbor */
 
@@ -363,7 +427,6 @@ apply_context(struct plugin_ctx *ctx)
     /* sr  commit */
     /* uci commit */
     /* restart uci service */
-
 
     return rc;
 }
@@ -457,10 +520,10 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
     ipv4->enabled = !strcmp(get_operstate(link), "UP") ? true : false;
 
     // PREFIX LENGTH
-    ipv4->address.subnet.prefix_length = get_prefixlen(fun_ctx);
+    ipv4->address.subnet.prefix_length = init_prefixlen(fun_ctx);
 
     // FORWARDING
-    ipv4->forwarding = get_forwarding(link);
+    ipv4->forwarding = init_forwarding(link);
 
     // ORIGIN (uci)
     rc = str_from_cmd(cmd_origin, interface_name, "%s", buf);
@@ -487,6 +550,7 @@ init_config(struct plugin_ctx *ctx)
         if (iface->proto.ipv4) {
             fprintf(stderr, "DO IT!\n");
             init_config_ipv4(iface->proto.ipv4, iface->name);
+            find_interface_type(ctx->uctx, iface->name);
         }
     }
 
@@ -555,7 +619,7 @@ data_provider_cb(const char *cb_xpath, sr_val_t **values, size_t *values_cnt, vo
             /* speed */
             uint64_t speed = 0;
             int_from_cmd(cmd_speed, interface_name, "%lu", &speed);
-            printf("speed %llu\n", speed);
+            printf("speed %lu\n", speed);
             sprintf(xpath, xpath_fmt, if_name, "speed");
             sr_val_set_xpath(&v[i_v], xpath);
             v[i_v].type = SR_UINT64_T;

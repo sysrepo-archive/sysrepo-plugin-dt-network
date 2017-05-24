@@ -133,7 +133,10 @@ struct if_interface
 {
     struct list_head head;
 
-    char *name;
+    char *name;                 /* eth0, enp3s0, etc. */
+    char *type;                 /* wan, lan, etc. */
+    char *description;
+
     union proto {
         struct ip_v4 *ipv4;
         struct ip_v6 *ipv6;

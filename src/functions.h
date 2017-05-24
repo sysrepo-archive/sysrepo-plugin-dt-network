@@ -43,11 +43,55 @@ struct function_ctx *make_function_ctx();
 
 void free_function_ctx(struct function_ctx *);
 
+/* init mac */
 char *get_mac(struct rtnl_link *link);
+/* int set_mac() */
 
-uint8_t get_prefixlen(struct function_ctx *ctx);
+uint32_t init_forwarding(struct rtnl_link *link);
+char *get_forwarding(struct uci_context *uctx, char *interface_type);
+int set_forwarding(struct uci_context *uctx, char *interface_type, bool forwarding);
 
-uint32_t get_forwarding(struct rtnl_link *link);
+int init_mtu(struct rtnl_link *link, uint16_t mtu);
+/**
+ * @brief Get MTU for an interface.
+ *
+ * @param[in] link Link is assumed to by initialized by something like rtnl_link_get_by_name.
+ */
+uint16_t get_mtu(struct rtnl_link *link);
+int set_mtu(struct uci_context *uctx, char *ifname, uint16_t mtu);
+
+char *get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
+int set_ip4(struct uci_context *uctx, char *network_type, char *ip);
+
+uint8_t init_prefixlen(struct function_ctx *ctx);
+char * get_prefixlen(struct uci_context *, char *);
+int set_prefixlen(struct uci_context *uctx, char *interface_type, uint8_t prefixlen);
+
+/* init netmask */
+uint8_t get_netmask(struct function_ctx *ctx);
+int set_netmask(struct uci_context *uctx, char *interface_type, char *netmask);
+
+
+/**
+ * @brief Set operational state of given link.
+ */
+ void set_operstate(struct rtnl_link *link, uint8_t operstate);
+/**
+ * @brief Get operational status for given interface.
+ *
+ * @param[in] link Link is assumed to by initialized by something like rtnl_link_get_by_name.
+ */
+ char * get_operstate(struct rtnl_link *link);
+
+
+
+/**
+ * Initialization function for libnl functionalities.
+ * Idea is to initialize context (link cache, address cache, etc.) and then
+ * to use that as an API for functions. This is done to lighten API for the functionalities
+ * so we don't always need to initialize from socket to everything else.
+ */
+int functions_init();
 
 /**
  * @brief Get statistics for an link representing interface.
@@ -75,33 +119,3 @@ void print_tc_info(struct tc_info_entry *tc_info, uint32_t count);
  */
 void get_tc_info(struct rtnl_link *link);
 
-char *get_ip4(struct function_ctx *ctx, struct rtnl_link *link);
-
-int set_ip(struct uci_context *uctx, char *ifname, char *ip);
-
-/**
- * @brief Get MTU for an interface.
- *
- * @param[in] link Link is assumed to by initialized by something like rtnl_link_get_by_name.
- */
- uint16_t get_mtu(struct rtnl_link *link);
-
-/**
- * @brief Set operational state of given link.
- */
- void set_operstate(struct rtnl_link *link, uint8_t operstate);
-
-/**
- * @brief Get operational status for given interface.
- *
- * @param[in] link Link is assumed to by initialized by something like rtnl_link_get_by_name.
- */
- char * get_operstate(struct rtnl_link *link);
-
-/**
- * Initialization function for libnl functionalities.
- * Idea is to initialize context (link cache, address cache, etc.) and then
- * to use that as an API for functions. This is done to lighten API for the functionalities
- * so we don't always need to initialize from socket to everything else.
- */
-int functions_init();

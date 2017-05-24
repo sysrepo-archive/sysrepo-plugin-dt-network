@@ -82,7 +82,7 @@ free_function_ctx(struct function_ctx *ctx)
 }
 
 void
-get_prefixlen_cb(struct nl_object *nlobj, void *data)
+init_prefixlen_cb(struct nl_object *nlobj, void *data)
 {
     uint8_t *res = data;
     uint8_t prefixlen = (uint8_t) rtnl_addr_get_prefixlen((struct rtnl_addr *) nlobj);
@@ -91,10 +91,10 @@ get_prefixlen_cb(struct nl_object *nlobj, void *data)
 
 
 uint8_t
-get_prefixlen(struct function_ctx *ctx)
+init_prefixlen(struct function_ctx *ctx)
 {
     uint8_t prefixlen;
-    nl_cache_foreach(ctx->cache_addr, get_prefixlen_cb, (void*) &prefixlen);
+    nl_cache_foreach(ctx->cache_addr, init_prefixlen_cb, (void*) &prefixlen);
     return prefixlen;
 }
 
@@ -151,36 +151,158 @@ get_ip4(struct function_ctx *ctx, struct rtnl_link *link)
     return res;
 }
 
-int
-set_ip(struct uci_context *uctx, char *ifname, char *ip)
-{
 
+/* static int */
+/* set_uci_item(struct uci_context *uctx, char *option_name, char *option_val) */
+/* { */
+/*     int rc = UCI_OK; */
+/*     char path[MAX_UCI_PATH]; */
+/*     struct uci_element *e; */
+/*     struct uci_section *s; */
+/*     struct uci_option *o; */
+/*     struct uci_ptr ptr; */
+/*     struct uci_package *up = uctx->backend->load(uctx, "network"); */
+/*     char *path_fmt = "network.%s.ipaddr=%s"; /\* Section and value *\/ */
+
+/*     if (up == NULL) { */
+/*         rc = -1; */
+/*         goto error; */
+/*     } */
+
+/*     uci_foreach_element(&up->sections, e) { */
+
+/*         s =  uci_to_section(e); */
+/*         if (!s) { */
+/*             rc = UCI_ERR_UNKNOWN; */
+/*             goto error; */
+/*         } */
+/*         o = uci_lookup_option(uctx, s, "ipaddr"); */
+/*         if (!o) { */
+/*             rc = UCI_ERR_NOTFOUND; */
+/*             goto error; */
+/*         } */
+/*         /\* check ... *\/ */
+/*         sprintf(path, path_fmt, s->type, val); */
+
+/*         rc = uci_lookup_ptr(uctx, &ptr, path, true); */
+/*         if (UCI_OK != rc) { */
+/*             goto error; */
+/*         } */
+/*         rc = uci_set(uctx, &ptr); */
+/*         if (UCI_OK != rc) { */
+/*             goto error; */
+/*         } */
+/*         rc = uci_save(uctx, ptr.p); */
+/*         if (UCI_OK != rc) { */
+/*             goto error; */
+/*         } */
+/*         rc = uci_commit(uctx, &(ptr.p), false); */
+/*         if (UCI_OK != rc) { */
+/*             goto error; */
+/*         } */
+/*     } */
+
+/*     return UCI_OK; */
+
+/*   error: */
+/*     return rc; */
+/* } */
+
+/* Set UCI configuration item. */
+static int
+set_uci_item(struct uci_context *uctx, char *section_type,
+             char *option_name, char *option_val)
+{
     int rc = UCI_OK;
     char path[MAX_UCI_PATH];
-    struct uci_element *e;
-    struct uci_section *s;
-    struct uci_option *o;
     struct uci_ptr ptr;
-    struct uci_package *up = uctx->backend->load(uctx, "network");
-    if (up == NULL) return -1;
+    char *path_fmt = "network.%s.%s=%s"; /* section-type.option-name=value */
 
-    uci_foreach_element(&up->sections, e)
-    {
-        s =  uci_to_section(e);
-        /* check ... */
-        o = uci_lookup_option(uctx, s, "ipaddr");
-        /* check ... */
-        char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
-        sprintf(path, path_fmt, s->type, ifname);
+    sprintf(path, path_fmt, section_type, option_name, option_val);
 
-        rc = uci_lookup_ptr(uctx, &ptr, path, true);
-        rc = uci_set(uctx, &ptr);
-        rc = uci_save(uctx, ptr.p);
-        rc = uci_commit(uctx, &(ptr.p), false);
+    rc = uci_lookup_ptr(uctx, &ptr, path, true);
+    if (UCI_OK != rc) {
+        goto error;
+    }
+    rc = uci_set(uctx, &ptr);
+    if (UCI_OK != rc) {
+        goto error;
+    }
+    rc = uci_save(uctx, ptr.p);
+    if (UCI_OK != rc) {
+        goto error;
+    }
+    rc = uci_commit(uctx, &(ptr.p), false);
+    if (UCI_OK != rc) {
+        goto error;
     }
 
+    return UCI_OK;
+
+  error:
     return rc;
 }
+
+
+/* Get item from UCI file. */
+static char *
+get_uci_item(struct uci_context *uctx, char *interface_type, char *option_name)
+{
+    int rc = UCI_OK;
+    char path[MAX_UCI_PATH];
+    struct uci_ptr ptr;
+
+    sprintf(path, "network.%s.%s", interface_type, option_name);
+    rc = uci_lookup_ptr(uctx, &ptr, path, true);
+
+    return rc == UCI_OK ? strdup(ptr.o->v.string) : NULL;
+}
+
+int
+set_forwarding(struct uci_context *uctx, char *interface_type, bool forwarding)
+{
+    int length = snprintf(NULL, 0, "%uh", forwarding);
+    char *forwarding_str = calloc(1, length);
+    snprintf(forwarding_str, length, "%uh", forwarding);
+
+    return set_uci_item(uctx, interface_type, "forwarding", forwarding_str);
+}
+
+char *
+get_forwarding(struct uci_context *uctx, char *interface_type)
+{
+    return get_uci_item(uctx, interface_type, "forwarding");
+}
+
+int
+set_ip4(struct uci_context *uctx, char *network_type, char *ip)
+{
+    return set_uci_item(uctx, network_type, "ipaddr", ip);
+}
+
+/* init prefixlen */
+char *
+get_prefixlen(struct uci_context *uctx, char *interface_type)
+{
+    return get_uci_item(uctx, interface_type, "ip4prefixlen");
+}
+
+int
+set_prefixlen(struct uci_context *uctx, char *interface_type, uint8_t prefixlen)
+{
+    int length = snprintf(NULL, 0, "%uh", prefixlen);
+    char *prefixlen_str = calloc(1, length);
+    snprintf(prefixlen_str, length, "%uh", prefixlen);
+
+    return set_uci_item(uctx, interface_type, "ip4prefixlen", prefixlen_str);
+}
+
+int
+set_netmask(struct uci_context *uctx, char *network_type, char *netmask)
+{
+    return set_uci_item(uctx, network_type, "netmask", netmask);
+}
+
 
 char *
 get_mac(struct rtnl_link *link)
@@ -249,7 +371,7 @@ get_tc_info(struct rtnl_link *link)
 
 
 int
-set_mtu(struct rtnl_link *link, uint16_t mtu)
+init_mtu(struct rtnl_link *link, uint16_t mtu)
 {
     if (mtu < MIN_MTU|| mtu > MAX_MTU) {
         fprintf(stderr, "MTU of value %uh is invalid, valid values are from %d to %d.", mtu, MIN_MTU, MAX_MTU);
@@ -269,8 +391,18 @@ get_mtu(struct rtnl_link *link)
     return mtu;
 }
 
+int
+set_mtu(struct uci_context *uctx, char *network_type, uint16_t mtu)
+{
+    int length = snprintf(NULL, 0, "%uh", mtu);
+    char *mtu_str = calloc(1, length);
+    snprintf(mtu_str, length, "%uh", mtu);
+
+    return set_uci_item(uctx, network_type, "mtu", mtu_str);
+}
+
 uint32_t
-get_forwarding(struct rtnl_link *link)
+init_forwarding(struct rtnl_link *link)
 {
     uint32_t value;
     const int IPV4_DEVCONF_FORWARDING = 1;
@@ -279,6 +411,12 @@ get_forwarding(struct rtnl_link *link)
 
     return value;
 }
+
+/* bool */
+/* get_forwarding_() */
+/* { */
+/*     uci_lookup_ptr(); */
+/* } */
 
 void
 set_operstate(struct rtnl_link *link, uint8_t operstate)
