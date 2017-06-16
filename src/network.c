@@ -139,7 +139,7 @@ print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val)
            printf("DELETED: ");
            sr_print_val(old_val);
         }
-	break;
+        break;
     case SR_OP_MODIFIED:
         if (NULL != old_val && NULL != new_val) {
            printf("MODIFIED: ");
@@ -156,6 +156,23 @@ print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val)
 	break;
     }
 }
+
+
+static void
+restart_network()
+{
+  pid_t restart_pid;
+
+  restart_pid = fork();
+  if (restart_pid > 0) {
+    INF("[pid=%d] Restarting network after module is changed.", restart_pid);
+    execv("/etc/init.d/network", (char *[]){ "/etc/init.d/network", "restart", NULL });
+    exit(0);
+  } else {
+    INF("[pid=%d] Could not execute network restart, do it manually?", restart_pid);
+  }
+}
+
 
 static void
 print_current_config(sr_session_ctx_t *session, const char *module_name)
@@ -201,10 +218,10 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     sr_val_t *new_value = NULL;
     char change_path[XPATH_MAX_LEN] = {0,};
 
-    /* if (SR_EV_VERIFY == event) { */
-    /*   SRP_LOG_DBG_MSG("Verify callback - always returns ok"); */
-    /*   return SR_ERR_OK; */
-    /* } */
+    if (SR_EV_VERIFY == event) {
+      SRP_LOG_DBG_MSG("Verify callback - always returns ok");
+      return SR_ERR_OK;
+    }
 
     printf("\n\n ========== Notification  %s =============================================", ev_to_str(event));
     if (SR_EV_APPLY == event) {
@@ -250,9 +267,11 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     }
 
     sysrepo_get_config(session, ctx);
-    
+
     printf("\n\n ========== END OF CHANGES =======================================\n\n");
 
+    /* Restart network to apply changes. */
+    restart_network();
 cleanup:
     sr_free_change_iter(it);
 
