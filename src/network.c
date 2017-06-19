@@ -5,6 +5,7 @@
 
 #include "network.h"
 #include "scripts.h"
+#include "common.h"
 
 #define MODULE "/ietf-ip"
 #define XPATH_MAX_LEN 100
@@ -68,6 +69,8 @@ neighbor_get_lladdr_cb(struct nl_object *obj, void *arg)
     char buf[MAX_ADDR_LEN];
 
     lladdr = rtnl_neigh_get_lladdr(neigh);
+    SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get neighbors");
+
     plugin_neigh->link_layer_address = nl_addr2str(lladdr, buf, MAX_ADDR_LEN);
 }
 
