@@ -66,15 +66,21 @@ origin_to_string(ip_addr_origin origin)
     return NULL;
 }
 
-typedef enum neighbor_origin_s
-{
+typedef enum neighbor_origin_s {
     NEIGHBOR_ORIGIN_OTHER,
     NEIGHBOR_ORIGIN_STATIC,
     NEIGHBOR_ORIGIN_DYNAMIC,
 } neighbor_origin;
 
-struct ip_v4
-{
+
+struct neighbor_v4 {
+    char *ip;
+    char *link_layer_address;
+};
+
+
+struct ip_v4 {
+    struct list_head neighbors;
     bool enabled;
     bool forwarding;
     ip_addr_origin origin;
@@ -90,18 +96,11 @@ struct ip_v4
         } subnet;
     } address;
 
-    struct neighbor_v4
-    {
-        char *ip;
-        char *link_layer_address;
-    } neighbor;
-
     /* neighbor list */
     /* subnet list */
 };
 
-struct ip_v6
-{
+struct ip_v6 {
     bool enabled;
     bool forwarding;
     unsigned short mtu;
@@ -129,8 +128,7 @@ struct ip_v6
     } autoconf;
 };
 
-struct if_interface
-{
+struct if_interface {
     struct list_head head;
 
     char *name;                 /* eth0, enp3s0, etc. */
