@@ -11,6 +11,7 @@
 #define BUFSIZE 256
 #define MAX_INTERFACES 10
 #define MAX_INTERFACE_NAME 10
+#define MAX_ADDR_LEN 32
 
 static int sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx);
 
@@ -56,6 +57,45 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
     }
 
     return NL_OK;
+}
+
+static void
+neighbor_get_lladdr_cb(struct nl_object *obj, void *arg)
+{
+    struct nl_addr *lladdr;
+    struct rtnl_neigh *neigh = (struct rtnl_neigh *) obj;
+    struct neighbor_v4 *plugin_neigh = (struct neighbor_v4 *) arg;
+    char buf[MAX_ADDR_LEN];
+
+    lladdr = rtnl_neigh_get_lladdr(neigh);
+    plugin_neigh->link_layer_address = nl_addr2str(lladdr, buf, MAX_ADDR_LEN);
+}
+
+static void
+neighbor_get_lladdr(struct neighbor_v4 *neighbor)
+{
+    struct nl_cache *neighbor_cache;
+    struct nl_sock *sock;
+    int rc;
+
+    sock = nl_socket_alloc();
+    if (sock == NULL) {
+        fprintf(stderr, "neighbor socket init failed");
+        return;
+    }
+
+    if(rc = nl_connect(sock, NETLINK_ROUTE)) {
+        fprintf(stderr, "neighbor socket connect failed");
+        return;
+    }
+
+    rc = rtnl_neigh_alloc_cache(sock, &neighbor_cache);
+    if (rc) {
+        fprintf(stderr, "neighbor cache init failed");
+        exit(-1);
+    }
+
+    nl_cache_foreach(neighbor_cache, neighbor_get_lladdr_cb, neighbor);
 }
 
 
@@ -417,7 +457,7 @@ apply_context(struct plugin_ctx *ctx)
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
       SRP_LOG_DBG_MSG("apply context");
-      
+
         struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name);
 
         /* enabled */

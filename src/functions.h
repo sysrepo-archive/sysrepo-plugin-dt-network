@@ -5,6 +5,7 @@
 #include <libnl3/netlink/netlink.h>
 #include <libnl3/netlink/route/link.h>
 #include <libnl3/netlink/route/addr.h>
+#include <libnl3/netlink/route/neighbour.h>
 #include <libnl3/netlink/route/link/inet.h>
 
 #include <libnl3/netlink/cache.h>
