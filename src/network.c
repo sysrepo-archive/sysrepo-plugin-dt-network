@@ -36,6 +36,7 @@ make_interface_ipv4(char *name)
     return NULL;
 }
 
+
 static int
 ls_interfaces_cb(struct nl_msg *msg, void *arg)
 {
@@ -60,19 +61,28 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
     return NL_OK;
 }
 
+
 static void
 neighbor_get_lladdr_cb(struct nl_object *obj, void *arg)
 {
     struct nl_addr *lladdr;
+    struct nl_addr *ipaddr;
     struct rtnl_neigh *neigh = (struct rtnl_neigh *) obj;
     struct neighbor_v4 *plugin_neigh = (struct neighbor_v4 *) arg;
     char buf[MAX_ADDR_LEN];
 
     lladdr = rtnl_neigh_get_lladdr(neigh);
-    SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get neighbors");
+    SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get phys address");
+
+    ipaddr = rtnl_neigh_get_dst(neigh);
+    SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get ip address");
 
     plugin_neigh->link_layer_address = nl_addr2str(lladdr, buf, MAX_ADDR_LEN);
+    plugin_neigh->ip = nl_addr2str(ipaddr, buf, MAX_ADDR_LEN);
+
+    return;
 }
+
 
 static void
 neighbor_get_lladdr(struct neighbor_v4 *neighbor)
@@ -87,18 +97,15 @@ neighbor_get_lladdr(struct neighbor_v4 *neighbor)
         return;
     }
 
-    if(rc = nl_connect(sock, NETLINK_ROUTE)) {
-        fprintf(stderr, "neighbor socket connect failed");
-        return;
-    }
+    rc = nl_connect(sock, NETLINK_ROUTE);
+    SR_CHECK_RET_MSG(rc, exit, "neighbor socket connect failed");
 
     rc = rtnl_neigh_alloc_cache(sock, &neighbor_cache);
-    if (rc) {
-        fprintf(stderr, "neighbor cache init failed");
-        exit(-1);
-    }
+    SR_CHECK_RET_MSG(rc, exit, "neighbor cache init failed");
 
     nl_cache_foreach(neighbor_cache, neighbor_get_lladdr_cb, neighbor);
+
+  exit: return;
 }
 
 
