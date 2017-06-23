@@ -29,6 +29,10 @@ find_package(SYSREPO REQUIRED)
 target_link_libraries(${CMAKE_PROJECT_NAME} ${SYSREPO_LIBRARIES})
 include_directories(${SYSREPO_INCLUDE_DIRS})
 
+find_package(UCI REQUIRED)
+include_directories(${UCI_INCLUDE_DIR})
+target_link_libraries(${CMAKE_PROJECT_NAME} ${UCI_LIBRARIES})
+
 find_package(LIBNL REQUIRED)
 find_package(LIBNL-NF REQUIRED)
 find_package(LIBNL-ROUTE REQUIRED)
