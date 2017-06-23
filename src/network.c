@@ -457,12 +457,13 @@ sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 }
 
 /* Apply functions to update the system with data from run-time context. */
+/* Only options in UCI can be changed. */
 static int
-apply_context(struct plugin_ctx *ctx)
+model_to_uci(struct plugin_ctx *ctx)
 {
     int rc = SR_ERR_OK;
 
-    fprintf(stderr, "========= APPLY_CONTEXT==\n");
+    INF_MSG("========= APPLY_CONTEXT==");
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
@@ -471,7 +472,8 @@ apply_context(struct plugin_ctx *ctx)
         struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name);
 
         /* enabled */
-        set_operstate(link, iface->proto.ipv4->enabled);
+        set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled);
+        /* set_operstate(link, iface->proto.ipv4->enabled); */
 
         /* forwarding */
         /* set_forwarding(link, iface->proto.ipv4->forwarding); */
@@ -781,21 +783,17 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     int rc = SR_ERR_OK;
     sr_log_stderr(SR_LL_DBG);
 
-    printf("sr_plugin_init_cb\n");
-    printf("pid = %d\n", getpid());
+    /* INF("sr_plugin_init_cb for sysrepo-plugin-dt-network"); */
 
     rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
                                     0, SR_SUBSCR_DEFAULT, &subscription);
-    if (SR_ERR_OK != rc) {
-        goto error;
-    }
+    SR_CHECK_RET(rc, error, "initialization error: %s", sr_strerror(rc));
 
     struct plugin_ctx *ctx = calloc(1, sizeof(*ctx));
     struct list_head interfaces = LIST_HEAD_INIT(interfaces);
     ctx->interfaces = &interfaces;
     ls_interfaces(ctx);
 
-    printf("print interface list\n");
     struct if_interface *iff;
     list_for_each_entry(iff, ctx->interfaces, head) {
         printf("Interface: %s\n", iff->name);

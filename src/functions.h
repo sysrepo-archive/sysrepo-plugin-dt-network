@@ -76,7 +76,9 @@ int set_netmask(struct uci_context *uctx, char *interface_type, char *netmask);
 /**
  * @brief Set operational state of given link.
  */
- void set_operstate(struct rtnl_link *link, uint8_t operstate);
+ /* void set_operstate(struct rtnl_link *link, uint8_t operstate); */
+int set_operstate(struct uci_context *uctx, char *network_type, uint16_t operstate);
+
 /**
  * @brief Get operational status for given interface.
  *

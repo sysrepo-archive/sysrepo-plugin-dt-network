@@ -418,11 +418,21 @@ init_forwarding(struct rtnl_link *link)
 /*     uci_lookup_ptr(); */
 /* } */
 
-void
-set_operstate(struct rtnl_link *link, uint8_t operstate)
+/* void */
+/* set_operstate(struct rtnl_link *link, uint8_t operstate) */
+/* { */
+/*     rtnl_link_set_operstate(link, operstate); */
+/* } */
+int
+set_operstate(struct uci_context *uctx, char *network_type, uint16_t operstate)
 {
-    rtnl_link_set_operstate(link, operstate);
+  int length = snprintf(NULL, 0, "%uh", operstate);
+  char *operstate_str = calloc(1, length);
+  snprintf(operstate_str, length, "%uh", operstate);
+
+  return set_uci_item(uctx, network_type, "enabled", operstate_str);
 }
+
 
 char *
 get_operstate(struct rtnl_link *link)
