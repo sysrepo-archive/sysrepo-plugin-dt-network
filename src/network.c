@@ -810,10 +810,6 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     /* INF("sr_plugin_init_cb for sysrepo-plugin-dt-network"); */
 
-    rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
-                                    0, SR_SUBSCR_DEFAULT, &subscription);
-    SR_CHECK_RET(rc, error, "initialization error: %s", sr_strerror(rc));
-
     struct plugin_ctx *ctx = calloc(1, sizeof(*ctx));
     struct list_head interfaces = LIST_HEAD_INIT(interfaces);
     ctx->interfaces = &interfaces;
@@ -833,29 +829,13 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     }
 
     init_config(ctx);
-    fprintf(stderr, "init config finish\n");
+    INF_MSG("init config finish\n");
     sysrepo_commit_network(session, ctx);
-    fprintf(stderr, "sysrepo commit finish\n");
+    INF_MSG("sysrepo commit finish\n");
 
-    struct uci_package *p = NULL;
-
-    rc = uci_load(ctx->uctx, "wireless", &p);
-    WRN("Package wireless: %s", strerror(rc));
-    if (p) {
-        uci_unload(ctx->uctx, p);
-    }
-
-    rc = uci_load(ctx->uctx, "firewall", &p);
-    WRN("Package firewall: %s", strerror(rc));
-    if (p) {
-        uci_unload(ctx->uctx, p);
-    }
-
-    rc = uci_load(ctx->uctx, "network", &p);
-    WRN("Package network: %d", rc);
-    if (p) {
-        uci_unload(ctx->uctx, p);
-    }
+    rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, NULL,
+                                    0, SR_SUBSCR_DEFAULT, &subscription);
+    SR_CHECK_RET(rc, error, "initialization error: %s", sr_strerror(rc));
 
 
     rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
