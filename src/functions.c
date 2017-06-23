@@ -7,6 +7,7 @@
 #include <arpa/inet.h>
 
 #include "functions.h"
+#include "uci.h"
 
 #define ADDR_STR_BUF_SIZE 80
 

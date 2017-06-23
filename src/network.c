@@ -12,6 +12,8 @@
 #define BUFSIZE 256
 #define MAX_INTERFACES 10
 #define MAX_INTERFACE_NAME 10
+#define MAX_INTERFACE_TYPE 10
+#define MAX_INTERFACE_DESCRIPTION 200
 #define MAX_ADDR_LEN 32
 
 static int sysrepo_get_config(sr_session_ctx_t *sess, struct plugin_ctx *ctx);
@@ -22,6 +24,9 @@ make_interface_ipv4(char *name)
     struct if_interface *interface;
     interface = calloc(1, sizeof(*interface));
     interface->name = calloc(1, MAX_INTERFACE_NAME);
+    interface->type = calloc(1, MAX_INTERFACE_TYPE);
+    interface->description = calloc(1, MAX_INTERFACE_TYPE);
+
     if (!(strcpy(interface->name, name))) {
         fprintf(stderr, "make_interface_ipv4\n");
         goto error;
@@ -63,7 +68,7 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
 
 
 static void
-neighbor_get_lladdr_cb(struct nl_object *obj, void *arg)
+neighbor_get_addr_cb(struct nl_object *obj, void *arg)
 {
     struct nl_addr *lladdr;
     struct nl_addr *ipaddr;
@@ -85,7 +90,7 @@ neighbor_get_lladdr_cb(struct nl_object *obj, void *arg)
 
 
 static void
-neighbor_get_lladdr(struct neighbor_v4 *neighbor)
+neighbor_get_addr(struct neighbor_v4 *neighbor)
 {
     struct nl_cache *neighbor_cache;
     struct nl_sock *sock;
@@ -103,15 +108,15 @@ neighbor_get_lladdr(struct neighbor_v4 *neighbor)
     rc = rtnl_neigh_alloc_cache(sock, &neighbor_cache);
     SR_CHECK_RET_MSG(rc, exit, "neighbor cache init failed");
 
-    nl_cache_foreach(neighbor_cache, neighbor_get_lladdr_cb, neighbor);
+    nl_cache_foreach(neighbor_cache, neighbor_get_addr_cb, neighbor);
 
   exit: return;
 }
 
 
 /* Find interface type using interface name. */
-static const char *
-find_interface_type(struct uci_context *uctx, char *ifname)
+static void
+find_interface_type(struct uci_context *uctx, char *ifname, char **if_type)
 {
     int rc = UCI_OK;
     char path[MAX_UCI_PATH];
@@ -119,29 +124,44 @@ find_interface_type(struct uci_context *uctx, char *ifname)
     struct uci_section *s;
     struct uci_option *o;
     struct uci_ptr ptr;
-    struct uci_package *up = uctx->backend->load(uctx, "network");
+    struct uci_package *up;
     char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
 
-    if (up == NULL) {
-        rc = -1;
+    WRN_MSG("uci package load....");
+    rc = uci_load(uctx, "network", &up);
+    WRN_MSG("loaded");
+
+
+    if (UCI_OK != rc) {
+        WRN("Cant find package network %s %s", ifname, strerror(rc));
         goto error;
     }
 
     uci_foreach_element(&up->sections, e) {
 
+
         s =  uci_to_section(e);
         if (!s) {
-            rc = UCI_ERR_UNKNOWN;
-            goto error;
+            fprintf(stderr, "no output for this section\n");
+            continue;
         }
-        o = uci_lookup_option(uctx, s, "ipaddr");
 
+        o = uci_lookup_option(uctx, s, "ifname");
+
+        if (o) printf("interface type is %s : %s [%s]\n", s->e.name, o->v.string, ifname);
         if (o && (0 == strcmp(ifname, o->v.string))) {                /* interface name found */
-            return o->v.string;
+            printf("copying %s\n", s->e.name);
+            strcpy(*if_type, s->e.name);
+            printf("copied %s\n", *if_type);
+            break;
         }
    }
 
   error:
+    if (up) {
+        uci_unload(uctx, up);
+    }
+
     return NULL;
 }
 
@@ -515,7 +535,8 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        if (strcmp(iface->name, "eth0")) { break; };
+        printf("to commit %s\n", iface->name);
+        if (strcmp(iface->name, "eth0")) { continue; };
 
         sprintf(xpath, xpath_fmt, iface->name, "type");
         val.type = SR_IDENTITYREF_T;
@@ -575,6 +596,8 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
 
     fun_ctx = make_function_ctx();
 
+    printf("rtnl_link_get_by_name\n");
+
     struct rtnl_link *link = rtnl_link_get_by_name(fun_ctx->cache_link, interface_name);
     if (link == NULL) {
         fprintf(stderr, "failed to get link\n");
@@ -605,6 +628,7 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
 
     }
 
+
     free_function_ctx(fun_ctx);
     return 0;
 
@@ -616,12 +640,13 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
 static int
 init_config(struct plugin_ctx *ctx)
 {
+    char *type;
     struct if_interface *iface;
+
     list_for_each_entry(iface, ctx->interfaces, head) {
         if (iface->proto.ipv4) {
-            fprintf(stderr, "DO IT!\n");
             init_config_ipv4(iface->proto.ipv4, iface->name);
-            find_interface_type(ctx->uctx, iface->name);
+            find_interface_type(ctx->uctx, iface->name, &iface->type);
         }
     }
 
@@ -794,13 +819,44 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     ctx->interfaces = &interfaces;
     ls_interfaces(ctx);
 
+    /* Allocate UCI context for uci files. */
+    ctx->uctx = uci_alloc_context();
+    if (!ctx->uctx) {
+        fprintf(stderr, "Can't allocate uci\n");
+        goto error;
+    }
+    INF("UCI ALLOCATED %l", ctx->uctx);
+
     struct if_interface *iff;
     list_for_each_entry(iff, ctx->interfaces, head) {
         printf("Interface: %s\n", iff->name);
     }
 
     init_config(ctx);
+    fprintf(stderr, "init config finish\n");
     sysrepo_commit_network(session, ctx);
+    fprintf(stderr, "sysrepo commit finish\n");
+
+    struct uci_package *p = NULL;
+
+    rc = uci_load(ctx->uctx, "wireless", &p);
+    WRN("Package wireless: %s", strerror(rc));
+    if (p) {
+        uci_unload(ctx->uctx, p);
+    }
+
+    rc = uci_load(ctx->uctx, "firewall", &p);
+    WRN("Package firewall: %s", strerror(rc));
+    if (p) {
+        uci_unload(ctx->uctx, p);
+    }
+
+    rc = uci_load(ctx->uctx, "network", &p);
+    WRN("Package network: %d", rc);
+    if (p) {
+        uci_unload(ctx->uctx, p);
+    }
+
 
     rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
                                    SR_SUBSCR_DEFAULT, &subscription);
