@@ -93,7 +93,7 @@ neighbor_get_addr(struct neighbor_v4 *neighbor)
 
   sock = nl_socket_alloc();
   if (sock == NULL) {
-      fprintf(stderr, "neighbor socket init failed");
+      ERR_MSG("neighbor socket init failed");
       return;
   }
 
@@ -133,7 +133,6 @@ find_interface_type(struct uci_context *uctx, char *ifname, char **if_type)
 
       s =  uci_to_section(e);
       if (!s) {
-          fprintf(stderr, "no output for this section\n");
           continue;
       }
 
@@ -172,39 +171,6 @@ ls_interfaces(struct plugin_ctx *ctx)
   nl_recvmsgs_default(socket);
 }
 
-static void
-print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val)
-{
-  switch(op) {
-  case SR_OP_CREATED:
-      if (NULL != new_val) {
-          printf("CREATED: ");
-          sr_print_val(new_val);
-      }
-      break;
-  case SR_OP_DELETED:
-      if (NULL != old_val) {
-          printf("DELETED: ");
-          sr_print_val(old_val);
-      }
-      break;
-  case SR_OP_MODIFIED:
-      if (NULL != old_val && NULL != new_val) {
-          printf("MODIFIED: ");
-          printf("old value ");
-          sr_print_val(old_val);
-          printf("new value ");
-          sr_print_val(new_val);
-      }
-      break;
-  case SR_OP_MOVED:
-      if (NULL != new_val) {
-          printf("MOVED: %s after %s", new_val->xpath, NULL != old_val ? old_val->xpath : NULL);
-      }
-      break;
-  }
-}
-
 
 /* Restart network given time to wait before calling script.
 * Function is parameterized with number of seconds to enable
@@ -224,27 +190,6 @@ restart_network(int wait_time)
   } else {
       INF("[pid=%d] Could not execute network restart, do it manually?", restart_pid);
   }
-}
-
-
-static void
-print_current_config(sr_session_ctx_t *session, const char *module_name)
-{
-  sr_val_t *values = NULL;
-  size_t count = 0;
-  int rc = SR_ERR_OK;
-  char select_xpath[XPATH_MAX_LEN];
-  snprintf(select_xpath, XPATH_MAX_LEN, "/%s:*//*", module_name);
-
-  rc = sr_get_items(session, select_xpath, &values, &count);
-  if (SR_ERR_OK != rc) {
-      printf("Error by sr_get_items: %s", sr_strerror(rc));
-      return;
-  }
-  for (size_t i = 0; i < count; i++){
-      sr_print_val(&values[i]);
-      }
-    sr_free_values(values, count);
 }
 
 
@@ -279,7 +224,6 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     sr_val_t *new_value = NULL;
     char change_path[XPATH_MAX_LEN] = {0,};
     struct plugin_ctx *ctx = private_ctx;
-    printf("private ctx %lu %lu %s\n", ctx->interfaces, private_ctx, ctx->key);
 
     if (SR_EV_VERIFY == event) {
         INF_MSG("Verify callback returns OK.");
@@ -291,50 +235,11 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
         print_current_config(session, module_name);
     }
 
-    INF_MSG("List intefaces in modulechangecb");
-    struct if_interface *iff;
-    list_for_each_entry(iff, ctx->interfaces, head) {
-        printf("Interface: %s %lu\n", iff->name, iff);
-    }
-
-    /* snprintf(change_path, XPATH_MAX_LEN, "/%s:*", module_name); */
-
-    /* rc = sr_get_changes_iter(session, change_path , &it); */
-    /* if (SR_ERR_OK != rc) { */
-    /*     ERR("Get changes iter failed for xpath %s", change_path); */
-    /*     goto cleanup; */
-    /* } */
-
-    /* while (SR_ERR_OK == (rc = sr_get_change_next(session, it, */
-    /*                                              &oper, &old_value, &new_value))) { */
-    /*     print_change(oper, old_value, new_value); */
-
-    /*     if (oper == SR_OP_MODIFIED || oper == SR_OP_CREATED) { */
-
-    /*         /\* bool eq = sr_xpath_node_name_eq(new_value->xpath, "type"); *\/ */
-    /*         fprintf(stderr, "enabled chaged? %s\n", sr_xpath_node_name(new_value->xpath)); */
-
-    /*         uint16_t mtu_new = new_value->data.uint16_val; /\* for testing purposes *\/ */
-
-    /*         /\* if ((SR_EV_VERIFY == event) && (mtu_new > 1600 || mtu_new < 1000)) { *\/ */
-    /*         /\*     return SR_ERR_VALIDATION_FAILED; *\/ */
-    /*         /\* } *\/ */
-    /*         if (SR_EV_ABORT == event) { */
-    /*             fprintf(stderr, "\nCUSTOM WARNING: Please set mtu between 1000 and 1600.\n"); */
-    /*         } */
-    /*     } */
-
-    /*     sr_free_val(old_value); */
-    /*     sr_free_val(new_value); */
-    /* } */
-
     rc = sysrepo_to_model(session, ctx);
     SR_CHECK_RET(rc, exit, "sysrepo_to_model fail: %d", rc);
 
     rc = model_to_uci(ctx);
     UCI_CHECK_RET(rc, exit, "model_to_uci fail: %d", rc);
-
-    fprintf(stderr, "\n\n ========== END OF CHANGES =======================================\n\n");
 
     /* Restart network to apply changes. */
     restart_network(RESTART_TIME_TO_WAIT);
@@ -465,11 +370,11 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         }
 
         /* name */
-        sprintf(xpath, xpath_fmt_ipv4, iface->name, "ifname");
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "name");
         rc = sr_get_item(sess, xpath, &val);
         if (SR_ERR_OK == rc) {
           WRN("ifname: %s", val->data.string_val);
-          iface->name = strdup(val->data.string_val);
+          /* iface->name = strdup(val->data.string_val); */
         } else {
           INF("No IFNAME for interface %s", iface->name);
         }
@@ -577,8 +482,7 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        printf("to commit %s\n", iface->name);
-        if (strcmp(iface->name, "eth1")) { continue; };
+        /* if (strcmp(iface->name, "eth1")) { continue; }; */
 
         sprintf(xpath, xpath_fmt, iface->name, "type");
         val.type = SR_IDENTITYREF_T;
@@ -868,16 +772,16 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
 
     init_config(ctx);
     INF_MSG("init config finish\n");
-    /* sysrepo_commit_network(session, ctx); */
+    sysrepo_commit_network(session, ctx);
     INF_MSG("sysrepo commit finish\n");
 
 
-    /* rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, *private_ctx, */
-    /*                                SR_SUBSCR_DEFAULT, &subscription); */
-    /* if (SR_ERR_OK != rc) { */
-    /*     fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc)); */
-    /*     goto error; */
-    /* } */
+    rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, *private_ctx,
+                                   SR_SUBSCR_DEFAULT, &subscription);
+    if (SR_ERR_OK != rc) {
+        fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc));
+        goto error;
+    }
 
     *private_ctx = ctx;
     INF("Private context %lu %lu\n", *private_ctx, ctx);
@@ -913,7 +817,6 @@ sr_plugin_cleanup_cb(sr_session_ctx_t *session, void *private_ctx)
 
     struct plugin_ctx *ctx = private_ctx;
     sr_unsubscribe(session, ctx->subscription);
-    if (ctx->subscription) free(ctx->subscription);
     free_function_ctx(ctx->fctx);
     free(ctx);
 
