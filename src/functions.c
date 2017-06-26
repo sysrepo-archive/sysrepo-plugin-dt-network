@@ -221,6 +221,8 @@ set_uci_item(struct uci_context *uctx, char *section_type,
 
     sprintf(path, path_fmt, section_type, option_name, option_val);
 
+    printf("set uci item %s\n", path);
+
     rc = uci_lookup_ptr(uctx, &ptr, path, true);
     if (UCI_OK != rc) {
         goto error;
@@ -238,9 +240,13 @@ set_uci_item(struct uci_context *uctx, char *section_type,
         goto error;
     }
 
+    printf("set_uci_item %d\n", rc);
+
     return UCI_OK;
 
   error:
+    printf("set_uci_item error %d\n", rc);
+
     return rc;
 }
 
@@ -398,6 +404,8 @@ set_mtu(struct uci_context *uctx, char *network_type, uint16_t mtu)
     int length = snprintf(NULL, 0, "%uh", mtu);
     char *mtu_str = calloc(1, length);
     snprintf(mtu_str, length, "%uh", mtu);
+
+    printf("set_mtu %s %u\n", network_type, mtu);
 
     return set_uci_item(uctx, network_type, "mtu", mtu_str);
 }
