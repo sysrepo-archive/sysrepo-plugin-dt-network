@@ -8,14 +8,8 @@
 #include "common.h"
 
 #define MODULE "/ietf-ip"
-#define XPATH_MAX_LEN 100
-#define BUFSIZE 256
-#define MAX_INTERFACES 10
-#define MAX_INTERFACE_NAME 10
-#define MAX_INTERFACE_TYPE 10
-#define MAX_INTERFACE_DESCRIPTION 200
-#define MAX_ADDR_LEN 32
-#define RESTART_TIME_TO_WAIT 3
+
+struct list_head interfaces = LIST_HEAD_INIT(interfaces);
 
 static int sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx);
 static int model_to_uci(struct plugin_ctx *ctx);
@@ -24,25 +18,19 @@ static int model_to_uci(struct plugin_ctx *ctx);
 static struct if_interface *
 make_interface_ipv4(char *name)
 {
-    struct if_interface *interface;
+  struct if_interface *interface;
 
-    interface = calloc(1, sizeof(*interface));
-    interface->name = calloc(1, MAX_INTERFACE_NAME);
+  interface = calloc(1, sizeof(*interface));
+  interface->name = strdup(name); //calloc(1, MAX_INTERFACE_NAME);
+  /* interface->type = calloc(1, MAX_INTERFACE_TYPE); */
+  interface->description = calloc(1, MAX_INTERFACE_DESCRIPTION);
+  interface->proto.ipv4 = calloc(1, sizeof(struct ip_v4));
 
-    if (!(strcpy(interface->name, name))) {
-        ERR("Failed to create interface: %s", name);
-        goto error;
-    }
+  return interface;
 
-    interface->type = calloc(1, MAX_INTERFACE_TYPE);
-    interface->description = calloc(1, MAX_INTERFACE_TYPE);
-    interface->proto.ipv4 = calloc(1, sizeof(struct ip_v4));
-
-    return interface;
-
-  error:
-    free(interface);
-    return NULL;
+error:
+  free(interface);
+  return NULL;
 }
 
 
@@ -50,25 +38,25 @@ make_interface_ipv4(char *name)
 static int
 ls_interfaces_cb(struct nl_msg *msg, void *arg)
 {
-    struct list_head *interfaces = (struct list_head *) arg;
-    struct if_interface *iff;
-    struct nlmsghdr *nlh = nlmsg_hdr(msg);
-    struct ifinfomsg *iface = NLMSG_DATA(nlh);
-    struct rtattr *hdr = IFLA_RTA(iface);
-    int remaining = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
+  struct list_head *interfaces = (struct list_head *) arg;
+  struct if_interface *iff;
+  struct nlmsghdr *nlh = nlmsg_hdr(msg);
+  struct ifinfomsg *iface = NLMSG_DATA(nlh);
+  struct rtattr *hdr = IFLA_RTA(iface);
+  int remaining = nlh->nlmsg_len - NLMSG_LENGTH(sizeof(*iface));
 
-    while (RTA_OK(hdr, remaining)) {
+  while (RTA_OK(hdr, remaining)) {
 
-        if (hdr->rta_type == IFLA_IFNAME) {
-            iff = make_interface_ipv4((char *) RTA_DATA(hdr));
-            list_add(&iff->head, interfaces);
-            INF("Found network interface %d: %s\n", iface->ifi_index, iff->name);
-        }
+      if (hdr->rta_type == IFLA_IFNAME) {
+          iff = make_interface_ipv4((char *) RTA_DATA(hdr));
+          list_add(&iff->head, interfaces);
+          INF("Found network interface %d: %s %lu", iface->ifi_index, iff->name, iff);
+      }
 
-        hdr = RTA_NEXT(hdr, remaining);
-    }
+      hdr = RTA_NEXT(hdr, remaining);
+  }
 
-    return NL_OK;
+  return NL_OK;
 }
 
 
@@ -76,22 +64,22 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
 static void
 neighbor_get_addr_cb(struct nl_object *obj, void *arg)
 {
-    struct nl_addr *lladdr;
-    struct nl_addr *ipaddr;
-    struct rtnl_neigh *neigh = (struct rtnl_neigh *) obj;
-    struct neighbor_v4 *plugin_neigh = (struct neighbor_v4 *) arg;
-    char buf[MAX_ADDR_LEN];
+  struct nl_addr *lladdr;
+  struct nl_addr *ipaddr;
+  struct rtnl_neigh *neigh = (struct rtnl_neigh *) obj;
+  struct neighbor_v4 *plugin_neigh = (struct neighbor_v4 *) arg;
+  char buf[MAX_ADDR_LEN];
 
-    lladdr = rtnl_neigh_get_lladdr(neigh);
-    SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get phys address");
+  lladdr = rtnl_neigh_get_lladdr(neigh);
+  SR_CHECK_NULL_RETURN_VOID(lladdr, "Can't get phys address");
 
-    ipaddr = rtnl_neigh_get_dst(neigh);
-    SR_CHECK_NULL_RETURN_VOID(ipaddr, "Can't get ip address");
+  ipaddr = rtnl_neigh_get_dst(neigh);
+  SR_CHECK_NULL_RETURN_VOID(ipaddr, "Can't get ip address");
 
-    plugin_neigh->link_layer_address = nl_addr2str(lladdr, buf, MAX_ADDR_LEN);
-    plugin_neigh->ip = nl_addr2str(ipaddr, buf, MAX_ADDR_LEN);
+  plugin_neigh->link_layer_address = nl_addr2str(lladdr, buf, MAX_ADDR_LEN);
+  plugin_neigh->ip = nl_addr2str(ipaddr, buf, MAX_ADDR_LEN);
 
-    return;
+  return;
 }
 
 
@@ -99,25 +87,25 @@ neighbor_get_addr_cb(struct nl_object *obj, void *arg)
 static void
 neighbor_get_addr(struct neighbor_v4 *neighbor)
 {
-    struct nl_cache *neighbor_cache;
-    struct nl_sock *sock;
-    int rc;
+  struct nl_cache *neighbor_cache;
+  struct nl_sock *sock;
+  int rc;
 
-    sock = nl_socket_alloc();
-    if (sock == NULL) {
-        fprintf(stderr, "neighbor socket init failed");
-        return;
-    }
+  sock = nl_socket_alloc();
+  if (sock == NULL) {
+      fprintf(stderr, "neighbor socket init failed");
+      return;
+  }
 
-    rc = nl_connect(sock, NETLINK_ROUTE);
-    SR_CHECK_RET_MSG(rc, exit, "neighbor socket connect failed");
+  rc = nl_connect(sock, NETLINK_ROUTE);
+  SR_CHECK_RET_MSG(rc, exit, "neighbor socket connect failed");
 
-    rc = rtnl_neigh_alloc_cache(sock, &neighbor_cache);
-    SR_CHECK_RET_MSG(rc, exit, "neighbor cache init failed");
+  rc = rtnl_neigh_alloc_cache(sock, &neighbor_cache);
+  SR_CHECK_RET_MSG(rc, exit, "neighbor cache init failed");
 
-    nl_cache_foreach(neighbor_cache, neighbor_get_addr_cb, neighbor);
+  nl_cache_foreach(neighbor_cache, neighbor_get_addr_cb, neighbor);
 
-  exit: return;
+exit: return;
 }
 
 
@@ -125,48 +113,46 @@ neighbor_get_addr(struct neighbor_v4 *neighbor)
 static void
 find_interface_type(struct uci_context *uctx, char *ifname, char **if_type)
 {
-    int rc = UCI_OK;
-    char path[MAX_UCI_PATH];
-    struct uci_element *e;
-    struct uci_section *s;
-    struct uci_option *o;
-    struct uci_ptr ptr;
-    struct uci_package *up;
-    char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
+  int rc = UCI_OK;
+  char path[MAX_UCI_PATH];
+  struct uci_element *e;
+  struct uci_section *s;
+  struct uci_option *o;
+  struct uci_ptr ptr;
+  struct uci_package *up;
+  char *path_fmt = "network.%s.ipaddr=%s"; /* Section and value */
 
-    WRN_MSG("uci package load....");
-    rc = uci_load(uctx, "network", &up);
-    WRN_MSG("loaded");
+  rc = uci_load(uctx, "network", &up);
+  UCI_CHECK_RET(rc, error, "Loading 'network' package failed %d", rc);
 
-    if (UCI_OK != rc) {
-        WRN("Cant find package network %s %s", ifname, strerror(rc));
-        goto error;
-    }
-    uci_foreach_element(&up->sections, e) {
+  if (UCI_OK != rc) {
+      WRN("Cant find package network %s %s", ifname, strerror(rc));
+      goto error;
+  }
+  uci_foreach_element(&up->sections, e) {
 
-        s =  uci_to_section(e);
-        if (!s) {
-            fprintf(stderr, "no output for this section\n");
-            continue;
-        }
+      s =  uci_to_section(e);
+      if (!s) {
+          fprintf(stderr, "no output for this section\n");
+          continue;
+      }
 
-        o = uci_lookup_option(uctx, s, "ifname");
+      o = uci_lookup_option(uctx, s, "ifname");
 
-        if (o) printf("interface type is %s : %s [%s]\n", s->e.name, o->v.string, ifname);
-        if (o && (0 == strcmp(ifname, o->v.string))) {                /* interface name found */
-            printf("copying %s\n", s->e.name);
-            strcpy(*if_type, s->e.name);
-            printf("copied %s\n", *if_type);
-            break;
-        }
-    }
+      if (o && (0 == strcmp(ifname, o->v.string))) {                /* interface name found */
+          INF("interface type is %s : %s [%s]\n", s->e.name, o->v.string, ifname);
+          *if_type = strdup(s->e.name);
+          break;
+      }
+  }
 
-  error:
-    if (up) {
-        uci_unload(uctx, up);
-    }
+error:
+  if (up) {
+      uci_unload(uctx, up);
+      INF_MSG("UCI unloaded.");
+  }
 
-    return NULL;
+  return NULL;
 }
 
 
@@ -174,90 +160,90 @@ find_interface_type(struct uci_context *uctx, char *ifname, char **if_type)
 static void
 ls_interfaces(struct plugin_ctx *ctx)
 {
-    struct nl_sock *socket = nl_socket_alloc();  // Allocate new netlink socket in memory.
-    nl_connect(socket, NETLINK_ROUTE);  // Create file descriptor and bind socket.
+  struct nl_sock *socket = nl_socket_alloc();  // Allocate new netlink socket in memory.
+  nl_connect(socket, NETLINK_ROUTE);  // Create file descriptor and bind socket.
 
-    /* Send request for all network interfaces. */
-    struct rtgenmsg rt_hdr = { .rtgen_family = AF_PACKET, };
-    nl_send_simple(socket, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, &rt_hdr, sizeof(rt_hdr));
+  /* Send request for all network interfaces. */
+  struct rtgenmsg rt_hdr = { .rtgen_family = AF_PACKET, };
+  nl_send_simple(socket, RTM_GETLINK, NLM_F_REQUEST | NLM_F_DUMP, &rt_hdr, sizeof(rt_hdr));
 
-    /* Retrieve the kernel's answer. */
-    nl_socket_modify_cb(socket, NL_CB_VALID, NL_CB_CUSTOM, ls_interfaces_cb, ctx->interfaces);
-    nl_recvmsgs_default(socket);
+  /* Retrieve the kernel's answer. */
+  nl_socket_modify_cb(socket, NL_CB_VALID, NL_CB_CUSTOM, ls_interfaces_cb, ctx->interfaces);
+  nl_recvmsgs_default(socket);
 }
 
 static void
 print_change(sr_change_oper_t op, sr_val_t *old_val, sr_val_t *new_val)
 {
-    switch(op) {
-    case SR_OP_CREATED:
-        if (NULL != new_val) {
-            printf("CREATED: ");
-            sr_print_val(new_val);
-        }
-        break;
-    case SR_OP_DELETED:
-        if (NULL != old_val) {
-            printf("DELETED: ");
-            sr_print_val(old_val);
-        }
-        break;
-    case SR_OP_MODIFIED:
-        if (NULL != old_val && NULL != new_val) {
-            printf("MODIFIED: ");
-            printf("old value ");
-            sr_print_val(old_val);
-            printf("new value ");
-            sr_print_val(new_val);
-        }
-        break;
-    case SR_OP_MOVED:
-        if (NULL != new_val) {
-            printf("MOVED: %s after %s", new_val->xpath, NULL != old_val ? old_val->xpath : NULL);
-        }
-        break;
-    }
+  switch(op) {
+  case SR_OP_CREATED:
+      if (NULL != new_val) {
+          printf("CREATED: ");
+          sr_print_val(new_val);
+      }
+      break;
+  case SR_OP_DELETED:
+      if (NULL != old_val) {
+          printf("DELETED: ");
+          sr_print_val(old_val);
+      }
+      break;
+  case SR_OP_MODIFIED:
+      if (NULL != old_val && NULL != new_val) {
+          printf("MODIFIED: ");
+          printf("old value ");
+          sr_print_val(old_val);
+          printf("new value ");
+          sr_print_val(new_val);
+      }
+      break;
+  case SR_OP_MOVED:
+      if (NULL != new_val) {
+          printf("MOVED: %s after %s", new_val->xpath, NULL != old_val ? old_val->xpath : NULL);
+      }
+      break;
+  }
 }
 
 
 /* Restart network given time to wait before calling script.
- * Function is parameterized with number of seconds to enable
- * waiting for Sysrepo and UCI to sync.
- */
+* Function is parameterized with number of seconds to enable
+* waiting for Sysrepo and UCI to sync.
+*/
 static void
 restart_network(int wait_time)
 {
-    pid_t restart_pid;
+  pid_t restart_pid;
 
-    restart_pid = fork();
-    if (restart_pid > 0) {
-        INF("[pid=%d] Restarting network in %d seconds after module is changed.", restart_pid, wait_time);
-        sleep(wait_time);
-        execv("/etc/init.d/network", (char *[]){ "/etc/init.d/network", "restart", NULL });
-        exit(0);
-    } else {
-        INF("[pid=%d] Could not execute network restart, do it manually?", restart_pid);
-    }
+  restart_pid = fork();
+  if (restart_pid > 0) {
+      INF("[pid=%d] Restarting network in %d seconds after module is changed.", restart_pid, wait_time);
+      sleep(wait_time);
+      execv("/etc/init.d/network", (char *[]){ "/etc/init.d/network", "restart", NULL });
+      exit(0);
+  } else {
+      INF("[pid=%d] Could not execute network restart, do it manually?", restart_pid);
+  }
 }
 
 
 static void
 print_current_config(sr_session_ctx_t *session, const char *module_name)
 {
-    sr_val_t *values = NULL;
-    size_t count = 0;
-    int rc = SR_ERR_OK;
-    char select_xpath[XPATH_MAX_LEN];
-    snprintf(select_xpath, XPATH_MAX_LEN, "/%s:*//*", module_name);
+  sr_val_t *values = NULL;
+  size_t count = 0;
+  int rc = SR_ERR_OK;
+  char select_xpath[XPATH_MAX_LEN];
+  snprintf(select_xpath, XPATH_MAX_LEN, "/%s:*//*", module_name);
 
-    rc = sr_get_items(session, select_xpath, &values, &count);
-    if (SR_ERR_OK != rc) {
-        printf("Error by sr_get_items: %s", sr_strerror(rc));
-        return;
-    }
-    for (size_t i = 0; i < count; i++){
-        sr_print_val(&values[i]);
-    }
+  rc = sr_get_items(session, select_xpath, &values, &count);
+  if (SR_ERR_OK != rc) {
+      printf("Error by sr_get_items: %s", sr_strerror(rc));
+      return;
+  }
+  for (size_t i = 0; i < count; i++){
+      sr_print_val(&values[i]);
+      }
     sr_free_values(values, count);
 }
 
@@ -293,6 +279,7 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     sr_val_t *new_value = NULL;
     char change_path[XPATH_MAX_LEN] = {0,};
     struct plugin_ctx *ctx = private_ctx;
+    printf("private ctx %lu %lu %s\n", ctx->interfaces, private_ctx, ctx->key);
 
     if (SR_EV_VERIFY == event) {
         INF_MSG("Verify callback returns OK.");
@@ -302,6 +289,12 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     if (SR_EV_APPLY == event) {
         INF_MSG("\n\n ========== CONFIG HAS CHANGED, CURRENT RUNNING CONFIG: ==========\n\n");
         print_current_config(session, module_name);
+    }
+
+    INF_MSG("List intefaces in modulechangecb");
+    struct if_interface *iff;
+    list_for_each_entry(iff, ctx->interfaces, head) {
+        printf("Interface: %s %lu\n", iff->name, iff);
     }
 
     /* snprintf(change_path, XPATH_MAX_LEN, "/%s:*", module_name); */
@@ -423,42 +416,65 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
     const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
     SRP_LOG_DBG_MSG("Sysrepo get config");
 
+    INF_MSG("List intefaces in sysrepo_to_model");
+    struct if_interface *iff;
+    list_for_each_entry(iff, ctx->interfaces, head) {
+        printf("Interface: %s\n", iff->name);
+    }
+
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        if (!iface) break;
-        if (!iface->name || strcmp(iface->name, "eth1")) { printf("section has no name\n");continue; }
+        if (!iface) { WRN_MSG("FUCK no interface in interface?"); break; }
+        if (!iface->name) { WRN_MSG("Interface has no name!"); continue; }
+        INF("Updating model - interface %s", iface->name);
 
         /* enabled */
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "enabled");
         rc = sr_get_item(sess, xpath, &val);
         if (SR_ERR_OK == rc) {
             iface->proto.ipv4->enabled = val->data.bool_val;
+        } else {
+            INF("No enabled for interface %s", iface->name);
         }
+
 
         /* forwarding */
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "forwarding");
         rc = sr_get_item(sess, xpath, &val);
         if (SR_ERR_OK == rc) {
             iface->proto.ipv4->forwarding = val->data.bool_val;
+        } else {
+            INF("No forwarding for interface %s", iface->name);
         }
 
-        /* /\* origin *\/ */
-        /* sprintf(xpath, xpath_fmt_ipv4, iface->name, "origin"); */
-        /* rc = sr_get_item(sess, xpath, &val); */
-        /* if (SR_ERR_OK == rc) { */
-        /*     iface->proto.ipv4->origin = string_to_origin(val->data.enum_val); */
-        /* } */
+        /* origin */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "origin");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->origin = string_to_origin(val->data.enum_val);
+        }
 
         /* MTU */
-        /* sprintf(xpath, xpath_fmt_ipv4, iface->name, "mtu"); */
-        /* rc = sr_get_item(sess, xpath, &val); */
-        /* if (SR_ERR_OK == rc) { */
-        /*     iface->proto.ipv4->mtu = val->data.uint16_val; */
-        /* } */
-        /* printf("ifaceproto: %l\n", iface->proto); */
-        /* printf("ipv4: %l\n", iface->proto.ipv4); */
-        /* printf("mtu: %l\n", iface->proto.ipv4->mtu); */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "mtu");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->mtu = val->data.uint16_val;
+        } else {
+            INF("No MTU for interface %s", iface->name);
+        }
+
+        /* name */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "ifname");
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+          WRN("ifname: %s", val->data.string_val);
+          iface->name = strdup(val->data.string_val);
+        } else {
+          INF("No IFNAME for interface %s", iface->name);
+        }
+
+
 
         /* printf("sysrepo_to_model new mtu %d\n", iface->proto.ipv4->mtu); */
 
@@ -480,13 +496,13 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 
         /* TODO neighbor */
 
-        /* if (val) { */
-        /*     sr_free_val(val); */
-        /* } */
+        if (val) {
+            sr_free_val(val);
+        }
     }
 
     INF_MSG("Sysrepo get config end");
-    return rc;
+    return SR_ERR_OK;
 }
 
 /* Apply functions to update the system with data from run-time context. */
@@ -497,50 +513,52 @@ model_to_uci(struct plugin_ctx *ctx)
     int rc = UCI_OK;
     struct uci_package *package = NULL;
 
-
     INF_MSG("========= MODEL TO UCI ==");
 
-    rc = uci_load(ctx->uctx, "network", &package);
-    UCI_CHECK_RET(rc, exit, "uci_load fail: %d", rc);
+    /* rc = uci_load(ctx->uctx, "network", &package); */
+    /* UCI_CHECK_RET(rc, exit, "uci_load fail: %d", rc); */
 
+    struct if_interface *iface;
+    list_for_each_entry(iface, ctx->interfaces, head) {
+        if (!iface->type) {
+          WRN("model_to_uci no type for interface %s, %s", iface->name, iface->type);
+            continue;
+        }
+        WRN("model_to_uci  type for interface %s is %lu %s", iface->name, iface->type, iface->type); 
+        /* struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name); */
 
-    /* struct if_interface *iface; */
-    /* list_for_each_entry(iface, ctx->interfaces, head) { */
-    /*     if (iface->proto.ipv4) { */
-    /*         INF("apply context %s", iface->name); */
-    /*     } */
+        /* enabled */
+        /* set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled); */
 
-    /*     /\* struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name); *\/ */
+        /* name */
+        set_name(ctx->uctx, iface->type, iface->name);
 
-    /*     /\* enabled *\/ */
-    /*     /\* set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled); *\/ */
-    /*     /\* set_operstate(link, iface->proto.ipv4->enabled); *\/ */
+        /* forwarding */
+        /* set_forwarding(link, iface->proto.ipv4->forwarding); */
 
-    /*     /\* forwarding *\/ */
-    /*     /\* set_forwarding(link, iface->proto.ipv4->forwarding); *\/ */
+        /* origin */
+        /* set_origin(link, iface->proto.ipv4->origin); */
 
-    /*     /\* origin *\/ */
-    /*     /\* set_origin(link, iface->proto.ipv4->origin); *\/ */
+        /* MTU */
+        set_mtu(ctx->uctx, iface->type, iface->proto.ipv4->mtu);
 
-    /*     /\* MTU *\/ */
-    /*     /\* set_mtu(ctx->uctx, iface->name, iface->proto.ipv4->mtu); *\/ */
-    /*     /\* set_mtu(link, iface->proto.ipv4->mtu); *\/ */
+        /* ip */
+        /* set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip); */
 
-    /*     /\* ip *\/ */
-    /*     /\* set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip); *\/ */
+        /* prefix length */
+        /* set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length); */
+        /* TODO neighbor */
 
-    /*     /\* prefix length *\/ */
-    /*     /\* set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length); *\/ */
+     }
 
-    /*     /\* TODO neighbor *\/ */
-
-    /*  } */
-    set_mtu(ctx->uctx, "eth1", 1400u);
-
+    /* INF_MSG("UCI commiting"); */
     /* rc = uci_commit(ctx->uctx, &package, false); */
     /* UCI_CHECK_RET(rc, exit, "uci_commit fail: %d", rc); */
+
+    INF_MSG("UCI commited.");
     /* sr  commit */
     /* uci commit */
+    /* uci_unload(ctx->uctx, package); */
 
   exit:
     return rc;
@@ -634,23 +652,23 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
     // MTU
     ipv4->mtu = get_mtu(link);
 
-    // ENABLED (operstate?)
-    ipv4->enabled = !strcmp(get_operstate(link), "UP") ? true : false;
+    /* // ENABLED (operstate?) */
+    /* ipv4->enabled = !strcmp(get_operstate(link), "UP") ? true : false; */
 
-    // PREFIX LENGTH
-    ipv4->address.subnet.prefix_length = init_prefixlen(fun_ctx);
+    /* // PREFIX LENGTH */
+    /* ipv4->address.subnet.prefix_length = init_prefixlen(fun_ctx); */
 
-    // FORWARDING
-    ipv4->forwarding = init_forwarding(link);
+    /* // FORWARDING */
+    /* ipv4->forwarding = init_forwarding(link); */
 
-    // ORIGIN (uci)
-    rc = str_from_cmd(cmd_origin, interface_name, "%s", buf);
-    if (rc == 0) {
-        ipv4->origin = string_to_origin(buf);
-    } else {
-        fprintf(stderr, "No 'origin' in uci file.\n");
+    /* // ORIGIN (uci) */
+    /* rc = str_from_cmd(cmd_origin, interface_name, "%s", buf); */
+    /* if (rc == 0) { */
+    /*     ipv4->origin = string_to_origin(buf); */
+    /* } else { */
+    /*     fprintf(stderr, "No 'origin' in uci file.\n"); */
 
-    }
+    /* } */
 
 
     free_function_ctx(fun_ctx);
@@ -668,6 +686,7 @@ init_config(struct plugin_ctx *ctx)
     struct if_interface *iface;
 
     list_for_each_entry(iface, ctx->interfaces, head) {
+        INF_MSG()
         if (iface->proto.ipv4) {
             init_config_ipv4(iface->proto.ipv4, iface->name);
             find_interface_type(ctx->uctx, iface->name, &iface->type);
@@ -835,7 +854,7 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     /* INF("sr_plugin_init_cb for sysrepo-plugin-dt-network"); */
 
     struct plugin_ctx *ctx = calloc(1, sizeof(*ctx));
-    struct list_head interfaces = LIST_HEAD_INIT(interfaces);
+    ctx->key = "bla";
     ctx->interfaces = &interfaces;
     ls_interfaces(ctx);
 
@@ -847,23 +866,18 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     }
     INF("UCI ALLOCATED %l", ctx->uctx);
 
-    struct if_interface *iff;
-    list_for_each_entry(iff, ctx->interfaces, head) {
-        printf("Interface: %s\n", iff->name);
-    }
-
     init_config(ctx);
     INF_MSG("init config finish\n");
-    sysrepo_commit_network(session, ctx);
+    /* sysrepo_commit_network(session, ctx); */
     INF_MSG("sysrepo commit finish\n");
 
 
-    rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, NULL,
-                                   SR_SUBSCR_DEFAULT, &subscription);
-    if (SR_ERR_OK != rc) {
-        fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc));
-        goto error;
-    }
+    /* rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, *private_ctx, */
+    /*                                SR_SUBSCR_DEFAULT, &subscription); */
+    /* if (SR_ERR_OK != rc) { */
+    /*     fprintf(stderr, "Error by sr_dp_get_items_subscribe: %s\n", sr_strerror(rc)); */
+    /*     goto error; */
+    /* } */
 
     *private_ctx = ctx;
     INF("Private context %lu %lu\n", *private_ctx, ctx);
@@ -872,15 +886,22 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
                                     0, SR_SUBSCR_DEFAULT, &subscription);
     SR_CHECK_RET(rc, error, "initialization error: %s", sr_strerror(rc));
 
-    set_mtu(ctx->uctx, "wan6", 1470u);
+    /* set_mtu(ctx->uctx, "wan6", 1470u); */
 
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
+    struct if_interface *iff;
+    list_for_each_entry(iff, ctx->interfaces, head) {
+        printf("Interface: %s %lu %s\n", iff->name, iff, iff->type);
+    }
+    printf("private ctx %lu %lu\n", ctx, ctx->interfaces);
+
 
     return SR_ERR_OK;
 
   error:
     SRP_LOG_ERR("Plugin initialization failed: %s", sr_strerror(rc));
     sr_unsubscribe(session, subscription);
+    free(ctx);
     return rc;
 }
 

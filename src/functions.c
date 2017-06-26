@@ -225,18 +225,22 @@ set_uci_item(struct uci_context *uctx, char *section_type,
 
     rc = uci_lookup_ptr(uctx, &ptr, path, true);
     if (UCI_OK != rc) {
+      printf("lookupointer %d\n", rc);
         goto error;
     }
     rc = uci_set(uctx, &ptr);
     if (UCI_OK != rc) {
+      printf("uciset %d\n", rc);
         goto error;
     }
     rc = uci_save(uctx, ptr.p);
     if (UCI_OK != rc) {
+      printf("ucisave %d\n", rc);
         goto error;
     }
     rc = uci_commit(uctx, &(ptr.p), false);
     if (UCI_OK != rc) {
+      printf("ucicommit %d\n", rc);
         goto error;
     }
 
@@ -396,6 +400,18 @@ get_mtu(struct rtnl_link *link)
     unsigned int mtu = rtnl_link_get_mtu(link);
 
     return mtu;
+}
+
+int
+set_name(struct uci_context *uctx, char *network_type, uint16_t mtu)
+{
+    int length = snprintf(NULL, 0, "%uh", mtu);
+    char *mtu_str = calloc(1, length);
+    snprintf(mtu_str, length, "%uh", mtu);
+
+    printf("set_mtu %s %u\n", network_type, mtu);
+
+    return set_uci_item(uctx, network_type, "ifname", mtu_str);
 }
 
 int

@@ -11,6 +11,15 @@
 #include "functions.h"
 
 #define IP_SIZE 15
+#define XPATH_MAX_LEN 100
+#define BUFSIZE 256
+#define MAX_INTERFACES 10
+#define MAX_INTERFACE_NAME 10
+#define MAX_INTERFACE_TYPE 10
+#define MAX_INTERFACE_DESCRIPTION 200
+#define MAX_ADDR_LEN 32
+#define RESTART_TIME_TO_WAIT 3
+
 
 typedef char uint8;
 
@@ -131,14 +140,14 @@ struct ip_v6 {
 struct if_interface {
     struct list_head head;
 
-    char *name;                 /* eth0, enp3s0, etc. */
-    char *type;                 /* wan, lan, etc. */
-    char *description;
-
     union proto {
         struct ip_v4 *ipv4;
         struct ip_v6 *ipv6;
     } proto;
+
+    char *name;                 /* eth0, enp3s0, etc. */
+    char *type;                 /* wan, lan, etc. */
+    char *description;
 };
 
 struct plugin_ctx {
