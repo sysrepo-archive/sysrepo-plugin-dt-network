@@ -8,6 +8,7 @@
 
 #include "functions.h"
 #include "uci.h"
+#include "common.h"
 
 #define ADDR_STR_BUF_SIZE 80
 
@@ -22,12 +23,12 @@ socket_init(struct nl_sock **socket, int protocol)
 
     *socket = nl_socket_alloc();
     if (socket == NULL) {
-        fprintf(stderr, "unable to allocate netlink socket for route family.");
+        ERR_MSG("unable to allocate netlink socket for route family.");
     }
 
     error = nl_connect(*socket, protocol);
     if (error < 0) {
-        fprintf(stderr, "unable to connect to route socket (%s)", nl_geterror(error));
+        ERR("unable to connect to route socket (%s)", nl_geterror(error));
         goto error;
     }
 
@@ -51,20 +52,20 @@ make_function_ctx()
     struct nl_sock *sk;
     rc = socket_init(&sk, NETLINK_ROUTE);
     if (rc) {
-        fprintf(stderr, "socket not initialized\n");
+        ERR_MSG("socket not initialized");
         goto error;
     }
     hctx->socket = sk;
 
     rc = rtnl_link_alloc_cache(hctx->socket, AF_UNSPEC, &(hctx->cache_link));
     if (rc) {
-        fprintf(stderr, "cache alloc error: %d\n", rc);
+        ERR("cache alloc error: %d", rc);
         goto error;
     }
 
     rc = rtnl_addr_alloc_cache(hctx->socket, &(hctx->cache_addr));
     if (rc != 0) {
-        printf("cant allocate addr cache: %d\n", rc);
+        ERR("cant allocate addr cache: %d", rc);
         goto error;
     }
 
@@ -221,35 +222,21 @@ set_uci_item(struct uci_context *uctx, char *section_type,
 
     sprintf(path, path_fmt, section_type, option_name, option_val);
 
-    printf("set uci item %s\n", path);
-
     rc = uci_lookup_ptr(uctx, &ptr, path, true);
-    if (UCI_OK != rc) {
-      printf("lookupointer %d\n", rc);
-        goto error;
-    }
-    rc = uci_set(uctx, &ptr);
-    if (UCI_OK != rc) {
-      printf("uciset %d\n", rc);
-        goto error;
-    }
-    rc = uci_save(uctx, ptr.p);
-    if (UCI_OK != rc) {
-      printf("ucisave %d\n", rc);
-        goto error;
-    }
-    rc = uci_commit(uctx, &(ptr.p), false);
-    if (UCI_OK != rc) {
-      printf("ucicommit %d\n", rc);
-        goto error;
-    }
+    UCI_CHECK_RET(rc, error, "lookup_pointer %d %s", rc, path);
 
-    printf("set_uci_item %d\n", rc);
+    rc = uci_set(uctx, &ptr);
+    UCI_CHECK_RET(rc, error, "uci_set %d %s", rc, path);
+
+    rc = uci_save(uctx, ptr.p);
+    UCI_CHECK_RET(rc, error, "uci_save %d %s", rc, path);
+
+    rc = uci_commit(uctx, &(ptr.p), false);
+    UCI_CHECK_RET(rc, error, "uci_commit %d %s", rc, path);
 
     return UCI_OK;
 
   error:
-    printf("set_uci_item error %d\n", rc);
 
     return rc;
 }
@@ -321,7 +308,7 @@ get_mac(struct rtnl_link *link)
     char buf[SIZE_BUF];
     struct nl_addr *addr = rtnl_link_get_addr(link);
     if (!addr) {
-        fprintf(stderr, "addr error\n");
+        ERR_MSG("addr error");
     }
 
     nl_addr2str(addr, buf, sizeof(buf));
@@ -385,7 +372,7 @@ int
 init_mtu(struct rtnl_link *link, uint16_t mtu)
 {
     if (mtu < MIN_MTU|| mtu > MAX_MTU) {
-        fprintf(stderr, "MTU of value %uh is invalid, valid values are from %d to %d.", mtu, MIN_MTU, MAX_MTU);
+        ERR("MTU of value %uh is invalid, valid values are from %d to %d.", mtu, MIN_MTU, MAX_MTU);
         return -1;
     }
 
@@ -408,8 +395,6 @@ set_name(struct uci_context *uctx, char *network_type, uint16_t mtu)
     int length = snprintf(NULL, 0, "%uh", mtu);
     char *mtu_str = calloc(1, length);
     snprintf(mtu_str, length, "%uh", mtu);
-
-    printf("set_mtu %s %u\n", network_type, mtu);
 
     return set_uci_item(uctx, network_type, "ifname", mtu_str);
 }
@@ -437,12 +422,6 @@ init_forwarding(struct rtnl_link *link)
     return value;
 }
 
-/* bool */
-/* get_forwarding_() */
-/* { */
-/*     uci_lookup_ptr(); */
-/* } */
-
 /* void */
 /* set_operstate(struct rtnl_link *link, uint8_t operstate) */
 /* { */
@@ -451,11 +430,7 @@ init_forwarding(struct rtnl_link *link)
 int
 set_operstate(struct uci_context *uctx, char *network_type, uint16_t operstate)
 {
-  int length = snprintf(NULL, 0, "%uh", operstate);
-  char *operstate_str = calloc(1, length);
-  snprintf(operstate_str, length, "%uh", operstate);
-
-  return set_uci_item(uctx, network_type, "enabled", operstate_str);
+    return set_uci_item(uctx, network_type, "enabled", operstate ? "1" : "0");
 }
 
 

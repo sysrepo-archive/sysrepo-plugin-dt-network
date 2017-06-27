@@ -25,6 +25,7 @@ make_interface_ipv4(char *name)
   /* interface->type = calloc(1, MAX_INTERFACE_TYPE); */
   interface->description = calloc(1, MAX_INTERFACE_DESCRIPTION);
   interface->proto.ipv4 = calloc(1, sizeof(struct ip_v4));
+  interface->proto.ipv4->enabled = true;
 
   return interface;
 
@@ -50,7 +51,7 @@ ls_interfaces_cb(struct nl_msg *msg, void *arg)
       if (hdr->rta_type == IFLA_IFNAME) {
           iff = make_interface_ipv4((char *) RTA_DATA(hdr));
           list_add(&iff->head, interfaces);
-          INF("Found network interface %d: %s %lu", iface->ifi_index, iff->name, iff);
+          INF("Found network interface %d: %s", iface->ifi_index, iff->name);
       }
 
       hdr = RTA_NEXT(hdr, remaining);
@@ -337,6 +338,7 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "enabled");
         rc = sr_get_item(sess, xpath, &val);
         if (SR_ERR_OK == rc) {
+          INF("+++++ENABLED for %s is %d", iface->name, val->data.bool_val);
             iface->proto.ipv4->enabled = val->data.bool_val;
         } else {
             INF("No enabled for interface %s", iface->name);
@@ -418,14 +420,13 @@ model_to_uci(struct plugin_ctx *ctx)
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
         if (!iface->type) {
-          WRN("model_to_uci no type for interface %s, %s", iface->name, iface->type);
             continue;
         }
         WRN("model_to_uci  type for interface %s is %lu %s", iface->name, iface->type, iface->type);
         /* struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name); */
 
         /* enabled */
-        set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled);
+        set_operstate(ctx->uctx, iface->type, iface->proto.ipv4->enabled);
 
         /* name */
         /* set_name(ctx->uctx, iface->type, iface->name); */
@@ -440,7 +441,7 @@ model_to_uci(struct plugin_ctx *ctx)
         set_mtu(ctx->uctx, iface->type, iface->proto.ipv4->mtu);
 
         /* ip */
-        set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip);
+        set_ip4(ctx->uctx, iface->type, iface->proto.ipv4->address.ip);
 
         /* prefix length */
         /* set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length); */
@@ -473,13 +474,9 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         val.type = SR_IDENTITYREF_T;
         val.data.identityref_val = "iana-if-type:ethernetCsmacd";
         sr_val_set_xpath(&val, xpath);
-        fprintf(stderr, "== Sysrepo commit network - set_item %s\n", xpath);
-        sr_print_val_stream(stderr, &val);
         rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
-
         if (SR_ERR_OK != rc) {
-            fprintf(stderr, "Error by sr_set_item: %s for %s\n", sr_strerror(rc), xpath);
-            goto cleanup;
+            WRN("Error by sr_set_item: %s for %s", sr_strerror(rc), xpath);
         }
 
         /* Set forwarding. */
@@ -489,37 +486,33 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         rc = sr_set_item(sess, xpath,
                          &val, SR_EDIT_DEFAULT);
         if (SR_ERR_OK != rc) {
-            fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
-            goto cleanup;
+            WRN("Error by sr_set_item: %s", sr_strerror(rc));
         }
 
+        
         /* set MTU. */
         val.type = SR_UINT16_T;
         val.data.uint16_val = iface->proto.ipv4->mtu;
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "mtu");
         rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
-
         if (SR_ERR_OK != rc) {
-            fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
-            goto cleanup;
+            WRN("Error by sr_set_item: %s", sr_strerror(rc));
         }
 
-        /* Set name. */
-        /* val.type = SR_STRING_T; */
-        /* val.data.string_val = iface->name; */
-        /* sprintf(xpath, xpath_fmt, iface->name, "name"); */
-        /* rc = sr_set_item(sess, xpath, */
-        /*                  &val, SR_EDIT_DEFAULT); */
-        /* if (SR_ERR_OK != rc) { */
-        /*   fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc)); */
-        /*   goto cleanup; */
-        /* } */
+        /* set ENABLED. */
+        val.type = SR_BOOL_T;
+        val.data.bool_val = iface->proto.ipv4->enabled;
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "enabled");
+        rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
+        if (SR_ERR_OK != rc) {
+          WRN("Error by sr_set_item: %s", sr_strerror(rc));
+        }
+        printf("==== set enabled %d", iface->proto.ipv4->enabled);
 
         /* Commit values set. */
         rc = sr_commit(sess);
         if (SR_ERR_OK != rc) {
-            fprintf(stderr, "Error by sr_commit: %s\n", sr_strerror(rc));
-            goto cleanup;
+            fprintf(stderr, "Error by sr_commit: %s", sr_strerror(rc));
         }
     }
 
@@ -729,7 +722,6 @@ data_provider_cb(const char *cb_xpath, sr_val_t **values, size_t *values_cnt, vo
             v[i_v].type = SR_UINT16_T;
             v[i_v].data.uint16_val = mtu;
             i_v++;
-            printf("MTU: %hu\n", mtu);
             *values = v;
 
         } else {
