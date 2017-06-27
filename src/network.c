@@ -14,7 +14,7 @@ struct list_head interfaces = LIST_HEAD_INIT(interfaces);
 static int sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx);
 static int model_to_uci(struct plugin_ctx *ctx);
 
-/* Create single ipv4 interface with a give name. */
+/* Create single ipv4 interface with a given name. */
 static struct if_interface *
 make_interface_ipv4(char *name)
 {
@@ -226,13 +226,12 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
     struct plugin_ctx *ctx = private_ctx;
 
     if (SR_EV_VERIFY == event) {
-        INF_MSG("Verify callback returns OK.");
+        INF_MSG("Verifying event.");
         return SR_ERR_OK;
     }
 
     if (SR_EV_APPLY == event) {
-        INF_MSG("\n\n ========== CONFIG HAS CHANGED, CURRENT RUNNING CONFIG: ==========\n\n");
-        print_current_config(session, module_name);
+        INF_MSG("Applying changes.");
     }
 
     rc = sysrepo_to_model(session, ctx);
@@ -248,7 +247,7 @@ module_change_cb(sr_session_ctx_t *session, const char *module_name, sr_notif_ev
   exit:
     ERR("Changes not applied: %d", rc);
 
-    return SR_ERR_OK;
+    return rc;
 }
 
 
@@ -370,7 +369,7 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         }
 
         /* name */
-        sprintf(xpath, xpath_fmt_ipv4, iface->name, "name");
+        sprintf(xpath, xpath_fmt, iface->name, "name");
         rc = sr_get_item(sess, xpath, &val);
         if (SR_ERR_OK == rc) {
           WRN("ifname: %s", val->data.string_val);
@@ -378,10 +377,6 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         } else {
           INF("No IFNAME for interface %s", iface->name);
         }
-
-
-
-        /* printf("sysrepo_to_model new mtu %d\n", iface->proto.ipv4->mtu); */
 
         /* /\* ip *\/ */
         /* sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/ip"); */
@@ -418,10 +413,7 @@ model_to_uci(struct plugin_ctx *ctx)
     int rc = UCI_OK;
     struct uci_package *package = NULL;
 
-    INF_MSG("========= MODEL TO UCI ==");
-
-    /* rc = uci_load(ctx->uctx, "network", &package); */
-    /* UCI_CHECK_RET(rc, exit, "uci_load fail: %d", rc); */
+    INF_MSG("== MODEL TO UCI ==");
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
@@ -429,14 +421,14 @@ model_to_uci(struct plugin_ctx *ctx)
           WRN("model_to_uci no type for interface %s, %s", iface->name, iface->type);
             continue;
         }
-        WRN("model_to_uci  type for interface %s is %lu %s", iface->name, iface->type, iface->type); 
+        WRN("model_to_uci  type for interface %s is %lu %s", iface->name, iface->type, iface->type);
         /* struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name); */
 
         /* enabled */
-        /* set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled); */
+        set_operstate(ctx->uctx, iface->name, iface->proto.ipv4->enabled);
 
         /* name */
-        set_name(ctx->uctx, iface->type, iface->name);
+        /* set_name(ctx->uctx, iface->type, iface->name); */
 
         /* forwarding */
         /* set_forwarding(link, iface->proto.ipv4->forwarding); */
@@ -448,7 +440,7 @@ model_to_uci(struct plugin_ctx *ctx)
         set_mtu(ctx->uctx, iface->type, iface->proto.ipv4->mtu);
 
         /* ip */
-        /* set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip); */
+        set_ip4(ctx->uctx, iface->name, iface->proto.ipv4->address.ip);
 
         /* prefix length */
         /* set_prefix_length(link, iface->proto.ipv4->address.subnet.prefix_length); */
@@ -456,14 +448,7 @@ model_to_uci(struct plugin_ctx *ctx)
 
      }
 
-    /* INF_MSG("UCI commiting"); */
-    /* rc = uci_commit(ctx->uctx, &package, false); */
-    /* UCI_CHECK_RET(rc, exit, "uci_commit fail: %d", rc); */
-
-    INF_MSG("UCI commited.");
-    /* sr  commit */
-    /* uci commit */
-    /* uci_unload(ctx->uctx, package); */
+    INF_MSG("UCI updated by model.");
 
   exit:
     return rc;
@@ -518,6 +503,17 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
             fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc));
             goto cleanup;
         }
+
+        /* Set name. */
+        /* val.type = SR_STRING_T; */
+        /* val.data.string_val = iface->name; */
+        /* sprintf(xpath, xpath_fmt, iface->name, "name"); */
+        /* rc = sr_set_item(sess, xpath, */
+        /*                  &val, SR_EDIT_DEFAULT); */
+        /* if (SR_ERR_OK != rc) { */
+        /*   fprintf(stderr, "Error by sr_set_item: %s\n", sr_strerror(rc)); */
+        /*   goto cleanup; */
+        /* } */
 
         /* Commit values set. */
         rc = sr_commit(sess);
@@ -768,14 +764,16 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
         fprintf(stderr, "Can't allocate uci\n");
         goto error;
     }
-    INF("UCI ALLOCATED %l", ctx->uctx);
 
+    /* read initial config from system */
     init_config(ctx);
     INF_MSG("init config finish\n");
+
+    /* Commit model to datastore */
     sysrepo_commit_network(session, ctx);
     INF_MSG("sysrepo commit finish\n");
 
-
+    /* operational data */
     rc = sr_dp_get_items_subscribe(session, "/ietf-interfaces:interfaces-state", data_provider_cb, *private_ctx,
                                    SR_SUBSCR_DEFAULT, &subscription);
     if (SR_ERR_OK != rc) {
@@ -784,7 +782,6 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     }
 
     *private_ctx = ctx;
-    INF("Private context %lu %lu\n", *private_ctx, ctx);
 
     rc = sr_module_change_subscribe(session, "ietf-interfaces", module_change_cb, *private_ctx,
                                     0, SR_SUBSCR_DEFAULT, &subscription);
@@ -793,12 +790,6 @@ sr_plugin_init_cb(sr_session_ctx_t *session, void **private_ctx)
     /* set_mtu(ctx->uctx, "wan6", 1470u); */
 
     SRP_LOG_DBG_MSG("Plugin initialized successfully");
-    struct if_interface *iff;
-    list_for_each_entry(iff, ctx->interfaces, head) {
-        printf("Interface: %s %lu %s\n", iff->name, iff, iff->type);
-    }
-    printf("private ctx %lu %lu\n", ctx, ctx->interfaces);
-
 
     return SR_ERR_OK;
 
