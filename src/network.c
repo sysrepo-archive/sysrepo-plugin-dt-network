@@ -330,7 +330,6 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        if (!iface) { WRN_MSG("FUCK no interface in interface?"); break; }
         if (!iface->name) { WRN_MSG("Interface has no name!"); continue; }
         INF("Updating model - interface %s", iface->name);
 
@@ -380,23 +379,21 @@ sysrepo_to_model(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
           INF("No IFNAME for interface %s", iface->name);
         }
 
-        /* /\* ip *\/ */
-        /* sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/ip"); */
-        /* sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.ip); */
-        /* rc = sr_get_item(sess, xpath, &val); */
-        /* if (SR_ERR_OK == rc) { */
-        /*     strcpy(iface->proto.ipv4->address.ip, val->data.string_val); */
-        /* } */
+        /* ip */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/ip");
+        sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.ip);
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            strcpy(iface->proto.ipv4->address.ip, val->data.string_val);
+        }
 
-        /* /\* prefix length *\/ */
-        /* sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/prefix_length"); */
-        /* sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.subnet.prefix_length); */
-        /* rc = sr_get_item(sess, xpath, &val); */
-        /* if (SR_ERR_OK == rc) { */
-        /*     iface->proto.ipv4->address.subnet.prefix_length = val->data.uint8_val; */
-        /* } */
-
-        /* TODO neighbor */
+        /* prefix length */
+        sprintf(xpath, xpath_fmt_ipv4, iface->name, "address[ip='%s']/prefix_length");
+        sprintf(xpath, xpath, iface->name, iface->proto.ipv4->address.subnet.prefix_length);
+        rc = sr_get_item(sess, xpath, &val);
+        if (SR_ERR_OK == rc) {
+            iface->proto.ipv4->address.subnet.prefix_length = val->data.uint8_val;
+        }
 
         if (val) {
             sr_free_val(val);
@@ -422,20 +419,15 @@ model_to_uci(struct plugin_ctx *ctx)
         if (!iface->type) {
             continue;
         }
-        WRN("model_to_uci  type for interface %s is %lu %s", iface->name, iface->type, iface->type);
-        /* struct rtnl_link *link = rtnl_link_get_by_name(ctx->fctx->cache_link, iface->name); */
 
         /* enabled */
         set_operstate(ctx->uctx, iface->type, iface->proto.ipv4->enabled);
-
-        /* name */
-        /* set_name(ctx->uctx, iface->type, iface->name); */
 
         /* forwarding */
         /* set_forwarding(link, iface->proto.ipv4->forwarding); */
 
         /* origin */
-        /* set_origin(link, iface->proto.ipv4->origin); */
+        set_origin(ctx->uctx, iface->type, origin_to_string(iface->proto.ipv4->origin));
 
         /* MTU */
         set_mtu(ctx->uctx, iface->type, iface->proto.ipv4->mtu);
@@ -464,11 +456,10 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
     const char *xpath_fmt_ipv4 = "/ietf-interfaces:interfaces/interface[name='%s']/ietf-ip:ipv4/%s";
     int rc = SR_ERR_OK;
     sr_val_t val = { 0 };
-    SRP_LOG_DBG_MSG("Sysrepo commit network");
+    SRP_LOG_DBG_MSG("Filling Sysrepo configuration from run-time model.");
 
     struct if_interface *iface;
     list_for_each_entry(iface, ctx->interfaces, head) {
-        /* if (strcmp(iface->name, "eth1")) { continue; }; */
 
         sprintf(xpath, xpath_fmt, iface->name, "type");
         val.type = SR_IDENTITYREF_T;
@@ -489,14 +480,13 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
             WRN("Error by sr_set_item: %s", sr_strerror(rc));
         }
 
-        
         /* set MTU. */
         val.type = SR_UINT16_T;
         val.data.uint16_val = iface->proto.ipv4->mtu;
         sprintf(xpath, xpath_fmt_ipv4, iface->name, "mtu");
         rc = sr_set_item(sess, xpath, &val, SR_EDIT_DEFAULT);
         if (SR_ERR_OK != rc) {
-            WRN("Error by sr_set_item: %s", sr_strerror(rc));
+            ("Error by sr_set_item: %s", sr_strerror(rc));
         }
 
         /* set ENABLED. */
@@ -507,7 +497,6 @@ sysrepo_commit_network(sr_session_ctx_t *sess, struct plugin_ctx *ctx)
         if (SR_ERR_OK != rc) {
           WRN("Error by sr_set_item: %s", sr_strerror(rc));
         }
-        printf("==== set enabled %d", iface->proto.ipv4->enabled);
 
         /* Commit values set. */
         rc = sr_commit(sess);
@@ -531,13 +520,8 @@ init_config_ipv4(struct ip_v4 *ipv4, char *interface_name)
 
     fun_ctx = make_function_ctx();
 
-    printf("rtnl_link_get_by_name\n");
-
     struct rtnl_link *link = rtnl_link_get_by_name(fun_ctx->cache_link, interface_name);
-    if (link == NULL) {
-        fprintf(stderr, "failed to get link\n");
-        goto error;
-    }
+    SR_CHECK_NULL_GOTO(link, error, "failed to get link");
 
     // IP
     strcpy(ipv4->address.ip, get_ip4(fun_ctx, link));

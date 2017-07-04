@@ -449,6 +449,12 @@ get_operstate(struct rtnl_link *link)
     return strdup(buf);
 }
 
+int
+set_origin(struct uci_context *uctx, char *network_type, char *origin)
+{
+    return set_uci_item(uctx, network_type, "origin", origin);
+}
+
 /* Callback used for applying changes to cache. */
 /* static void */
 /* set_cb(struct nl_object *obj, void *arg) */
